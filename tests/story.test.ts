@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { makeStory, cleanName, orderTotal, THEMES } from '../src/story';
-const hero = { name: 'aarav', age: 5, pronoun: 'he' as const, outfit: 'Explorer', sidekick: '🐉 Dragon' };
+const hero = { name: 'aarav', age: 5, pronoun: 'he' as const, outfit: 'Explorer', sidekick: 'Nibbs' };
 describe('seeded story', () => {
   it('substitutes the name, pronoun, outfit and sidekick', () => {
     const s = makeStory('door', hero);
@@ -8,7 +8,7 @@ describe('seeded story', () => {
     expect(all).toContain('Aarav');
     expect(all).not.toContain('Mira');
     expect(all).toContain('his explorer');
-    expect(all).toContain('Dot the Dragon');
+    expect(all).toContain('Nibbs');
     expect(all).toContain('5 years old');
   });
   it('every theme has 8 pages with images', () => {

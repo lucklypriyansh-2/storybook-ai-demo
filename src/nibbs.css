@@ -1,0 +1,43 @@
+.nibbs{display:inline-block;aspect-ratio:200/210}.nibbs svg{width:100%;height:100%;overflow:visible}
+.nb-all,.nb-bodygrp,.nb-wing,.nb-arm,.nb-lids,.nb-pupils,.nb-face,.nb-pencil,.nb-q,.nb-star,.nb-tear,.nb-m-o{transform-box:fill-box}
+.nb-m,.nb-book,.nb-pencil,.nb-tear,.nb-q,.nb-star{opacity:0}
+.nb-lids{transform-origin:center top;transform:scaleY(0)}
+.nb-bodygrp{transform-origin:50% 100%}.nb-wl{transform-origin:100% 50%}.nb-wr{transform-origin:0% 50%}
+.nb-al{transform-origin:70% 20%}.nb-ar{transform-origin:15% 10%}
+/* every state: blink + breathe (idle layer, like Duolingo's always-on idle layer) */
+.nibbs .nb-lids{animation:nb-blink 4s infinite}
+.nibbs .nb-bodygrp{animation:nb-breathe 2.4s ease-in-out infinite}
+.nibbs .nb-wing{animation:nb-flap 2.4s ease-in-out infinite}
+@keyframes nb-blink{0%,92%,100%{transform:scaleY(0)}95%{transform:scaleY(1)}}
+@keyframes nb-breathe{50%{transform:scale(1.025,.975)}}
+@keyframes nb-flap{50%{transform:rotate(-8deg)}}
+.nb-wr{animation-direction:reverse!important}
+/* idle */
+.st-idle .nb-m-smile{opacity:1}
+/* wave */
+.st-wave .nb-m-open{opacity:1}.st-wave .nb-ar{animation:nb-wave 1.2s cubic-bezier(.34,1.56,.64,1) infinite}
+@keyframes nb-wave{0%,100%{transform:rotate(-165deg)}50%{transform:rotate(-125deg)}}
+/* celebrate */
+.st-celebrate .nb-m-open{opacity:1}.st-celebrate .nb-all{animation:nb-jump 1s cubic-bezier(.34,1.56,.64,1) infinite;transform-origin:50% 100%}
+.st-celebrate .nb-al{animation:nb-armL 1s ease-in-out infinite}.st-celebrate .nb-ar{animation:nb-armR 1s ease-in-out infinite}
+.st-celebrate .nb-star{animation:nb-pop 1s cubic-bezier(.34,1.56,.64,1) infinite}.st-celebrate .s2{animation-delay:.15s}.st-celebrate .s3{animation-delay:.3s}.st-celebrate .s4{animation-delay:.45s}
+
+@keyframes nb-jump{0%,100%{transform:translateY(0) scale(1.06,.94)}40%{transform:translateY(-34px) scale(.96,1.04)}70%{transform:translateY(0) scale(1.04,.96)}}
+@keyframes nb-armL{50%{transform:rotate(130deg)}}@keyframes nb-armR{50%{transform:rotate(-130deg)}}
+@keyframes nb-pop{0%{opacity:0;transform:scale(0)}40%{opacity:1;transform:scale(1.3)}100%{opacity:0;transform:scale(.8) translateY(-10px)}}
+/* thinking */
+.st-thinking .nb-m-o{opacity:1;transform:scale(.6);transform-origin:center}.st-thinking .nb-pencil{opacity:1;animation:nb-tap .8s ease-in-out infinite;transform-origin:50% 100%}
+.st-thinking .nb-pupils{animation:nb-look 3s ease-in-out infinite}.st-thinking .nb-q{opacity:1;animation:nb-bob 1.6s ease-in-out infinite}
+.st-thinking .nb-face{animation:nb-tilt 3s ease-in-out infinite;transform-origin:center}
+@keyframes nb-tap{50%{transform:rotate(-12deg) translateY(-4px)}}@keyframes nb-look{0%,100%{transform:translate(4px,-6px)}50%{transform:translate(-4px,-6px)}}
+@keyframes nb-bob{50%{transform:translateY(-8px) rotate(10deg)}}@keyframes nb-tilt{50%{transform:rotate(-5deg)}}
+/* talking / reading-along: viseme cycle (Rive: viseme number input) */
+.st-talking .nb-book{opacity:1}.st-talking .nb-pupils{transform:translateY(5px)}
+.st-talking .nb-m-smile{animation:nb-v1 .6s steps(1) infinite}.st-talking .nb-m-open{animation:nb-v2 .6s steps(1) infinite}.st-talking .nb-m-o{animation:nb-v3 .6s steps(1) infinite}
+@keyframes nb-v1{0%{opacity:1}33%,100%{opacity:0}}@keyframes nb-v2{0%,32%{opacity:0}33%{opacity:1}66%,100%{opacity:0}}@keyframes nb-v3{0%,65%{opacity:0}66%,100%{opacity:1}}
+/* sad / error */
+.st-sad .nb-m-sad{opacity:1}.st-sad .nb-all{transform:translateY(6px)}.st-sad .nb-wing{animation:none;transform:rotate(25deg)}
+.st-sad .nb-pupils{transform:translateY(6px)}.st-sad .nb-brow{transform:rotate(0);d:path("M64 70 q14 8 26 4 M110 74 q12 -4 26 -4")}
+.st-sad .nb-tear{animation:nb-tear 1.8s ease-in infinite}
+@keyframes nb-tear{0%{opacity:0;transform:translateY(0)}20%{opacity:1}100%{opacity:0;transform:translateY(40px)}}
+@media (prefers-reduced-motion:reduce){.nibbs *{animation:none!important}.st-talking .nb-m-smile,.st-celebrate .nb-star,.st-sad .nb-tear{opacity:1}}

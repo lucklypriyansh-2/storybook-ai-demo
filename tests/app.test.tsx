@@ -13,17 +13,17 @@ describe('app flow', () => {
   });
   it('sample photos enable continue', () => {
     render(<App initial="upload" />);
-    fireEvent.click(screen.getByText(/Use sample photos/));
-    expect(screen.getByRole('button', { name: 'Continue (3/3)' })).not.toBeDisabled();
+    fireEvent.click(screen.getByText(/use sample photos/));
+    expect(screen.getByRole('button', { name: 'Continue' })).not.toBeDisabled();
   });
   it('character name flows into the hero button', () => {
     render(<App initial="create" />);
     fireEvent.change(screen.getByLabelText("Child's name"), { target: { value: 'Zoya' } });
-    expect(screen.getByRole('button', { name: /Looks like Zoya/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /That's Zoya/ })).toBeInTheDocument();
   });
   it('checkout is labelled demo and totals correctly', () => {
     render(<App initial="checkout" />);
-    expect(screen.getByText('DEMO · NO PAYMENT')).toBeInTheDocument();
+    expect(screen.getByText(/no card, no payment/)).toBeInTheDocument();
     expect(screen.getByTestId('total')).toHaveTextContent('$46.98');
     fireEvent.click(screen.getByRole('button', { name: /Softcover/ }));
     expect(screen.getByTestId('total')).toHaveTextContent('$36.98');
@@ -33,6 +33,6 @@ describe('app flow', () => {
     render(<App initial="loading" />);
     for (let k = 0; k < 40; k++) await act(async () => { vi.advanceTimersByTime(500); });
     vi.useRealTimers();
-    expect(await screen.findByTestId('page-no')).toHaveTextContent('Page 1 / 8');
+    expect(await screen.findByTestId('page-no')).toHaveTextContent('1/8');
   });
 });
