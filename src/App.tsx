@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { img } from './motion';
 import { ONBOARD_KEY, StoreProvider, useStore, type Route } from './store';
 import { Btn } from './ui';
@@ -22,7 +22,8 @@ function Shell() {
   const dark = s.route === 'feed' || s.route === 'welcome';
   const tabs = s.route === 'feed' || s.route === 'make' || s.route === 'shelf' || s.route === 'grownups';
   let body: React.ReactNode;
-  if (s.error) body = <div className="body cream"><Nibbs mood="sad" width={140} /><h2>Something went wrong</h2><p className="cap">{s.error}</p><Btn onClick={() => location.reload()}>Try again</Btn></div>;
+  if (s.error && String(s.error).includes('worker_session_required')) body = <InviteGate />;
+  else if (s.error) body = <div className="body cream"><Nibbs mood="sad" width={140} /><h2>Something went wrong</h2><p className="cap">{s.error}</p><Btn onClick={() => location.reload()}>Try again</Btn></div>;
   else if (!s.ready) body = <div className="body cream center" data-testid="loading"><Nibbs mood="thinking" width={150} /><p className="lead">Nibbs is getting ready…</p></div>;
   else body = <Screen r={s.route} />;
   return <div className="stage"><div className={`phone app${dark ? ' dark' : ''}`} data-route={s.route} data-backend={s.api.mode}>
@@ -69,4 +70,36 @@ function Tabbar({ dark }: { dark: boolean }) {
   const s = useStore();
   const t: [string, string, Route][] = [['🎬', 'Reels', 'feed'], ['✨', 'Make', 'make'], ['📚', 'Shelf', 'shelf'], ['🔒', 'Grown-ups', 'grownups']];
   return <nav className={`tabbar2${dark ? ' dk' : ''}`}>{t.map(([i, l, r]) => <button key={l} className={s.route === r ? 'on' : ''} aria-label={l} onClick={() => r === 'grownups' ? s.askGate('Grown-ups area', () => s.go('grownups')) : s.go(r)}><b>{i}</b>{l}</button>)}</nav>;
+}
+
+
+function InviteGate() {
+  const [code, setCode] = useState('FAMILY1');
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const s = useStore();
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const api = s.api as DataApi & { invite?: (c: string, e: string) => Promise<unknown> };
+      if (!api.invite) throw new Error('invite not available');
+      await api.invite(code.trim(), email.trim());
+      location.reload();
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e));
+      setBusy(false);
+    }
+  };
+  return <div className="body cream scroll" data-testid="invite-gate">
+    <Nibbs mood="wave" width={140} />
+    <h2>Family invite</h2>
+    <p className="lead">Enter the invite code to unlock cloud reels for this phone.</p>
+    <label className="cap">Invite code</label>
+    <input value={code} onChange={e => setCode(e.target.value)} autoCapitalize="characters" style={{ width: '100%', marginBottom: 12, padding: 12, borderRadius: 12, border: '2px solid #D9D6F5' }} />
+    <label className="cap">Your email</label>
+    <input value={email} onChange={e => setEmail(e.target.value)} type="email" inputMode="email" placeholder="you@example.com" style={{ width: '100%', marginBottom: 12, padding: 12, borderRadius: 12, border: '2px solid #D9D6F5' }} />
+    {err && <p className="cap" style={{ color: '#B00020' }}>{err}</p>}
+    <Btn disabled={busy || !code.trim() || !email.includes('@')} onClick={submit}>{busy ? 'Signing in…' : 'Continue'}</Btn>
+  </div>;
 }
