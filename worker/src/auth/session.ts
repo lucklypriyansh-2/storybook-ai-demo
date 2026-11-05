@@ -17,21 +17,22 @@ function sessionCookie(id: string, sig: string): string {
     `${SESSION_COOKIE}=${id}.${sig}`,
     "Secure",
     "HttpOnly",
-    "SameSite=Lax",
+    "SameSite=None",
+    "Partitioned",
     "Path=/",
     `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
   ].join("; ");
 }
 
 export function clearSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+  return `${SESSION_COOKIE}=; Secure; HttpOnly; SameSite=None; Partitioned; Path=/; Max-Age=0`;
 }
 
 export async function createSession(
   env: Env,
   userId: string,
   now = Date.now(),
-): Promise<{ id: string; cookie: string }> {
+): Promise<{ id: string; cookie: string; token: string }> {
   const id = randomToken();
   const sig = await signSessionId(env.WORKER_SESSION_SECRET, id);
   // Only the hash is persisted so a D1 read cannot lift a live cookie (H-2); the
@@ -41,10 +42,16 @@ export async function createSession(
   )
     .bind(await sha256Hex(id), userId, now + SESSION_TTL_MS, now)
     .run();
-  return { id, cookie: sessionCookie(id, sig) };
+  const token = `${id}.${sig}`;
+  return { id, cookie: sessionCookie(id, sig), token };
 }
 
 export function readSessionCookie(req: Request): string | null {
+  const auth = req.headers.get("Authorization");
+  if (auth && auth.toLowerCase().startsWith("bearer ")) {
+    const token = auth.slice(7).trim();
+    if (token) return token;
+  }
   const header = req.headers.get("Cookie");
   if (!header) return null;
   for (const part of header.split(";")) {

@@ -35,9 +35,9 @@ export async function invite({ env, req }: Ctx): Promise<Response> {
     user = { id, is_admin: 0 };
   }
 
-  const { cookie } = await createSession(env, user.id);
+  const { cookie, token } = await createSession(env, user.id);
   return Response.json(
-    { user_id: user.id, is_admin: user.is_admin === 1 },
+    { user_id: user.id, is_admin: user.is_admin === 1, session_token: token },
     { headers: { "Set-Cookie": cookie } },
   );
 }

@@ -37,13 +37,28 @@ export class WorkerApi implements DataApi {
   private lastJobs: RenderJob[] = [];
   private subs = new Set<(r: Reel[]) => void>();
 
-  constructor(private base: string) {}
+  constructor(private base: string) {
+    try { this.token = sessionStorage.getItem('sb_session_token') ?? ''; } catch { this.token = ''; }
+  }
+  private token = '';
+  private persistToken(token: string) {
+    this.token = token;
+    try {
+      if (token) sessionStorage.setItem('sb_session_token', token);
+      else sessionStorage.removeItem('sb_session_token');
+    } catch { /* private mode */ }
+  }
 
   private async req<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers: Record<string, string> = {
+      ...(init.body && !(init.body instanceof FormData) ? { 'content-type': 'application/json' } : {}),
+      ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+      ...(init.headers as Record<string, string> | undefined),
+    };
     const res = await fetch(this.base + path, {
       credentials: 'include',
       ...init,
-      headers: { ...(init.body && !(init.body instanceof FormData) ? { 'content-type': 'application/json' } : {}), ...init.headers },
+      headers,
     });
     const body = res.status === 204 ? null : await res.json().catch(() => null);
     if (!res.ok) throw new WorkerError(res.status, (body as { error?: string } | null)?.error ?? 'request_failed', body);
@@ -52,12 +67,14 @@ export class WorkerApi implements DataApi {
 
   // ---- auth (invite-code only, design §4) ----
   async invite(code: string, email: string) {
-    return this.req<{ user_id: string; is_admin: boolean }>('/api/auth/invite', {
+    const out = await this.req<{ user_id: string; is_admin: boolean; session_token?: string }>('/api/auth/invite', {
       method: 'POST', body: JSON.stringify({ code, email }),
     });
+    if (out.session_token) this.persistToken(out.session_token);
+    return out;
   }
   async me() { return this.req<{ user_id: string; is_admin: boolean }>('/api/auth/me'); }
-  async logout() { await this.req('/api/auth/logout', { method: 'POST' }); }
+  async logout() { await this.req('/api/auth/logout', { method: 'POST' }); this.persistToken(''); }
 
   async init(): Promise<Household> {
     try { await this.me(); } catch (e) {

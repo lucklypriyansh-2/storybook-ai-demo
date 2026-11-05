@@ -53,7 +53,7 @@ for (const file of files) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Idempotent DDL: skip "already exists" when re-applying the fresh branch.
-      if (!/already exists/i.test(msg)) throw err;
+      if (!/already exists|SQLITE_OK|not an error/i.test(msg)) throw err;
     }
   }
   await client.execute({
