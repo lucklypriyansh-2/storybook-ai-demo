@@ -27,8 +27,8 @@ export class Forbidden extends ApiError {
 }
 
 export class BadRequest extends ApiError {
-  constructor(message = "bad_request") {
-    super(400, "bad_request", message);
+  constructor(code = "bad_request") {
+    super(400, code, code);
     this.name = "BadRequest";
   }
 }

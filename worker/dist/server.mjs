@@ -257,8 +257,8 @@ var Forbidden = class extends ApiError {
   }
 };
 var BadRequest = class extends ApiError {
-  constructor(message = "bad_request") {
-    super(400, "bad_request", message);
+  constructor(code = "bad_request") {
+    super(400, code, code);
     this.name = "BadRequest";
   }
 };
@@ -621,13 +621,42 @@ async function call(apiKey, body, fetchImpl) {
   }
   return await res.json();
 }
-function imageFromResponse(resp) {
-  const url = resp.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-  if (!url) throw new Error("openrouter_no_image");
+var DATA_URL_RE = /data:image\/[^;,\s]+;base64,[A-Za-z0-9+/=]+/;
+function decodeImageUrl(url) {
+  if (!url.startsWith("data:image/")) throw new Error("openrouter_unsupported_url");
   const comma = url.indexOf(",");
-  const b64 = comma >= 0 ? url.slice(comma + 1) : url;
+  const b64 = (comma >= 0 ? url.slice(comma + 1) : url).replace(/\s+/g, "");
   const bin = atob(b64);
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+function imageUrlFromContent(content) {
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!part || part.type !== "image_url" && part.type !== "image") continue;
+      const url = typeof part.image_url === "string" ? part.image_url : part.image_url?.url ?? part.url;
+      if (url) return url;
+    }
+    return void 0;
+  }
+  if (typeof content === "string") {
+    const match = content.match(DATA_URL_RE);
+    if (match) return match[0];
+  }
+  return void 0;
+}
+function imageFromResponse(resp) {
+  const message = resp.choices?.[0]?.message;
+  const url = message?.images?.[0]?.image_url?.url ?? imageUrlFromContent(message?.content);
+  if (!url) throw new Error("openrouter_no_image");
+  return decodeImageUrl(url);
+}
+function textFromResponse(resp) {
+  const content = resp.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => part?.type === "text" || part?.text ? part.text ?? "" : "").join("");
+  }
+  return "";
 }
 function makeOpenRouterImage(apiKey, fetchImpl = fetch) {
   return {
@@ -666,7 +695,7 @@ function makeOpenRouterText(apiKey, fetchImpl = fetch) {
         fetchImpl
       );
       return {
-        value: { text: resp.choices?.[0]?.message?.content ?? "" },
+        value: { text: textFromResponse(resp) },
         actualUsd: COSTS.shot_list.usd,
         requestId: resp.id
       };

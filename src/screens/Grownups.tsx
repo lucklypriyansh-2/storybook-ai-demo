@@ -4,7 +4,7 @@ import { Btn, Toggle } from '../ui';
 import type { ConsentKind } from '../data';
 
 export const CONSENT_ROWS: [ConsentKind, string, string][] = [
-  ['create', "Make {name}'s character and reels", 'Needed for the app. Cartoon avatar only, no photos.'],
+  ['create', "Make {name}'s character and reels", 'Needed for the app. Cartoon avatar, or add a photo for an AI likeness you can preview.'],
   ['family_share', 'Share with family I invite', 'Private links to people you add. Never public.'],
   ['ai_training', 'Help improve our AI', 'Separate consent (COPPA 2026). Off unless you turn it on.'],
   ['marketing', 'Marketing emails to me', 'About new books and offers. Nothing to {name}.'],

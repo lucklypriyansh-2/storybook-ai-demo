@@ -13,10 +13,11 @@ export function EndCard({ reel, onClose, onNext }: { reel: Reel; onClose: () => 
     <div className="eyebrow2">TO BE CONTINUED…</div>
     <h1>{fill(t.cliffhanger, s.name, reel.state)}</h1>
     <motion.div className="cover3d" style={{ backgroundImage: `url(${img(t.cover)})` }} initial={{ rotateY: 30, y: 30, opacity: 0 }} animate={{ rotateY: -14, y: 0, opacity: 1 }} transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }} />
-    <b className="bt">{b?.title}</b><span className="bs">The full story · {b?.pages.length ?? 0} pages · read-along with Nibbs</span>
+    <b className="bt">{b?.title ?? 'This story'}</b>
+    <span className="bs" data-testid="endcard-pages">{b && b.pages.length > 0 ? `The full story · ${b.pages.length} pages · read-along with Nibbs` : 'The full story · read-along with Nibbs'}</span>
     <div className="spacer" />
-    <Btn kind="sun" onClick={() => b && s.go('book', b.id)}>Read the whole story</Btn>
-    <Btn kind="outline-dk" style={{ marginTop: 12 }} onClick={() => s.askGate('Buying a printed book', () => s.go('paywall', 'book'))}>Get it as a real book 🔒</Btn>
+    <Btn kind="sun" disabled={!b} onClick={() => b && s.go('book', b.id)}>Read the whole story</Btn>
+    <Btn kind="outline-dk" style={{ marginTop: 12 }} disabled={!b} onClick={() => b && s.askGate('Buying a printed book', () => s.go('paywall', 'book'))}>Get it as a real book 🔒</Btn>
     <p className="nx"><button className="linkish dk" onClick={onNext}>Next reel</button> · <button className="linkish dk" onClick={onClose}>Stay here</button></p>
   </motion.div>;
 }

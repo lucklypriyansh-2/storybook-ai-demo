@@ -1,7 +1,11 @@
 import { DEFAULT_LOOK, type Look } from '../mascot';
 import { SETTINGS_DEFAULTS, CONSENT_DEFAULTS } from './local';
-import { TEMPLATES } from './seed';
-import type { Consent, ConsentKind, DataApi, Household, PublishItem, Reel, ReelState, ReelVersion, RenderJob, Settings } from './types';
+import { TEMPLATES, bookPages, fill } from './seed';
+import type { Book, Consent, ConsentKind, DataApi, Household, PublishItem, Reel, ReelState, ReelVersion, RenderJob, Settings } from './types';
+
+/** Client-side metadata the Worker doesn't return yet (template + edited state per reel). */
+type ReelMeta = { template_id: string; state: ReelState; version: number };
+const META_KEY = 'sb.reelMeta.v1';
 
 /** Error carrying the Worker's HTTP status + error code so the UI can map 402/429/401 to modals. */
 export class WorkerError extends Error {
@@ -19,9 +23,9 @@ type WorkerReel = { id: string; status: string; tier: string; created_at: number
 
 /**
  * Cloudflare Worker backend (worker/). Activated when VITE_API_URL is baked in at build time.
- * Thin bridge for this milestone: auth, kids, photos, character sheets, reels and job polling are
- * worker-backed; the template/book/render-job surface has no Worker equivalent yet and degrades
- * to static templates + in-memory state so views still load.
+ * Auth, kids, photos, consent, character sheets, reels and job polling are worker-backed.
+ * Templates are static seed rows; per-reel template/state/version live in a client metadata map
+ * (`sb.reelMeta.v1`) and books are derived from that map + the server reel list (no book endpoint).
  */
 export class WorkerApi implements DataApi {
   readonly mode = 'worker' as const;
@@ -36,9 +40,49 @@ export class WorkerApi implements DataApi {
   }));
   private lastJobs: RenderJob[] = [];
   private subs = new Set<(r: Reel[]) => void>();
+  /** reel_id -> template/state/version the Worker doesn't persist for us yet. */
+  private reelMeta = new Map<string, ReelMeta>();
+  /** Short-lived memo of the last `listReels()` snapshot so reels() + books() agree. */
+  private lastList: { at: number; rows: WorkerReel[] } | null = null;
 
   constructor(private base: string) {
     try { this.token = sessionStorage.getItem('sb_session_token') ?? ''; } catch { this.token = ''; }
+    this.loadMeta();
+  }
+
+  private loadMeta() {
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, ReelMeta>;
+      for (const [id, m] of Object.entries(parsed)) if (m && typeof m === 'object') this.reelMeta.set(id, m);
+    } catch { /* private mode / corrupt: start empty */ }
+  }
+  private saveMeta() {
+    try { localStorage.setItem(META_KEY, JSON.stringify(Object.fromEntries(this.reelMeta))); }
+    catch { /* private mode: metadata lives for this session only */ }
+  }
+
+  /** Cached server reel list (~1s) shared by reels() and books() so they see the same snapshot. */
+  private async getList(): Promise<WorkerReel[]> {
+    if (this.lastList && Date.now() - this.lastList.at < 1000) return this.lastList.rows;
+    const rows = await this.listReels();
+    this.lastList = { at: Date.now(), rows };
+    return rows;
+  }
+  private invalidateList() { this.lastList = null; }
+
+  // ---- consent (per-kid parent affirmation, design §5) ----
+  // Cached in sessionStorage so repeat sheets reuse the same consent instead of
+  // spamming new rows for one upload session.
+  async createConsent(parentName: string, othersConsented: boolean, kidId = this.kidId): Promise<{ consent_id: string }> {
+    const cacheKey = 'sb.consentId.' + kidId;
+    try { const cached = sessionStorage.getItem(cacheKey); if (cached) return { consent_id: cached }; } catch { /* private */ }
+    const out = await this.req<{ consent_id: string }>('/api/consent', {
+      method: 'POST', body: JSON.stringify({ kid_id: kidId, parent_name: parentName, others_consented: othersConsented }),
+    });
+    try { sessionStorage.setItem(cacheKey, out.consent_id); } catch { /* private */ }
+    return out;
   }
   private token = '';
   private persistToken(token: string) {
@@ -74,6 +118,8 @@ export class WorkerApi implements DataApi {
     return out;
   }
   async me() { return this.req<{ user_id: string; is_admin: boolean }>('/api/auth/me'); }
+  /** Provider flags from the Worker (used for honest HD/motion gating; never fakes availability). */
+  async health() { return this.req<{ ok: boolean; build: string; flags: { openrouter: boolean; fal: boolean; kill: boolean } }>('/api/health'); }
   async logout() { await this.req('/api/auth/logout', { method: 'POST' }); this.persistToken(''); }
 
   async init(): Promise<Household> {
@@ -115,15 +161,21 @@ export class WorkerApi implements DataApi {
     });
   }
 
-  /** Polls a job until it is done/failed or the deadline passes. */
-  async pollJob(jobId: string, { timeoutMs = 120_000, intervalMs = 1000 } = {}): Promise<JobRow> {
+  /** Polls a job until it is done/failed or the deadline passes. `onTick` streams progress to the UI. */
+  async pollJob(jobId: string, { timeoutMs = 120_000, intervalMs = 1000, onTick }: { timeoutMs?: number; intervalMs?: number; onTick?: (job: JobRow) => void } = {}): Promise<JobRow> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const job = await this.req<JobRow>(`/api/jobs/${jobId}`);
+      onTick?.(job);
       if (job.status === 'done' || job.status === 'failed') return job;
       if (Date.now() > deadline) throw new Error(`job_timeout:${jobId}`);
       await new Promise(r => setTimeout(r, intervalMs));
     }
+  }
+
+  /** Latest character-sheet row for a kid; `sheet_url` is a signed 1h URL when a blob is stored. */
+  async characterSheet(kidId = this.kidId): Promise<{ version: number; sheet_url: string | null; updated_at: string | null }> {
+    return this.req<{ version: number; sheet_url: string | null; updated_at: string | null }>(`/api/kids/${kidId}/character_sheet`);
   }
 
   // ---- reels ----
@@ -150,14 +202,23 @@ export class WorkerApi implements DataApi {
   // ---- DataApi surface ----
   async templates() { return TEMPLATES; }
   async reels(): Promise<Reel[]> {
-    const rows = await this.listReels();
+    const rows = await this.getList();
+    // Drop metadata for reels the server no longer returns (deleted elsewhere/other device).
+    const live = new Set(rows.map(r => r.id));
+    let pruned = false;
+    for (const id of [...this.reelMeta.keys()]) if (!live.has(id)) { this.reelMeta.delete(id); pruned = true; }
+    if (pruned) this.saveMeta();
     return rows.map(r => this.toReel(r));
   }
   private toReel(r: WorkerReel): Reel {
     const iso = new Date(r.created_at).toISOString();
+    const meta = this.reelMeta.get(r.id);
     return {
-      id: r.id, template_id: '', state: { scene: '', outfit: '', co_star: 'nibbs', text: '' },
-      version: 1, status: this.mapStatus(r.status), video_url: null,
+      id: r.id,
+      template_id: meta?.template_id ?? '',
+      state: meta ? { ...meta.state } : { scene: '', outfit: '', co_star: 'nibbs', text: '' },
+      version: meta?.version ?? 1,
+      status: this.mapStatus(r.status), video_url: null,
       loved: this.loved.get(r.id) ?? false, saved: this.saved.get(r.id) ?? false,
       created_at: iso, updated_at: iso,
     };
@@ -165,19 +226,56 @@ export class WorkerApi implements DataApi {
   async reelVersions(id: string): Promise<ReelVersion[]> {
     const r = (await this.reels()).find(x => x.id === id);
     if (!r) return [];
-    return [{ id: `${id}:1`, reel_id: id, version: 1, state: r.state, state_hash: '', status: r.status, created_at: r.created_at }];
+    return [{ id: `${id}:${r.version}`, reel_id: id, version: r.version, state: r.state, state_hash: '', status: r.status, created_at: r.created_at }];
   }
   async jobs() { return this.lastJobs; }
-  async books() { return []; }
+  /** Books derived from the cached server reel list + local metadata (cheap, no fetch). */
+  async books(): Promise<Book[]> {
+    const rows = await this.getList();
+    const out: Book[] = [];
+    for (const r of rows) {
+      const meta = this.reelMeta.get(r.id);
+      if (!meta) continue; // unknown source (e.g. created on another device) → don't invent a book
+      const t = TEMPLATES.find(t => t.id === meta.template_id);
+      if (!t) continue;
+      out.push({
+        id: `book:${r.id}`,
+        reel_id: r.id,
+        title: fill(t.book_title, this.kidName || 'Mira'),
+        pages: bookPages(t, this.kidName || 'Mira', meta.state),
+      });
+    }
+    // rows() already arrive newest-first (server ORDER BY created_at DESC), matching Feed order.
+    return out;
+  }
   async setLoved(id: string, v: boolean) { this.loved.set(id, v); this.emit(); }
   async setSaved(id: string, v: boolean) { this.saved.set(id, v); }
   async remake(id: string, state: ReelState) {
-    const { reel_id, job_id } = await this.generateReel(state.text || 'A new adventure', 'free');
-    return { reel_id: reel_id || id, version: 2, job_id };
+    const prev = this.reelMeta.get(id);
+    const t = prev ? TEMPLATES.find(t => t.id === prev.template_id) : undefined;
+    // Align the Worker's `story` with the edited line where possible (non-breaking).
+    const { reel_id, job_id } = await this.generateReel(state.text || t?.title || 'A new adventure', 'free');
+    const version = (prev?.version ?? 1) + 1;
+    const target = reel_id || id;
+    this.reelMeta.set(target, {
+      template_id: prev?.template_id ?? t?.id ?? '',
+      state: { ...state },
+      version,
+    });
+    this.saveMeta();
+    this.invalidateList();
+    this.emit();
+    return { reel_id: target, version, job_id };
   }
   async createReel(templateId: string) {
     const t = TEMPLATES.find(t => t.id === templateId);
     const { reel_id, job_id } = await this.generateReel(t?.title ?? 'A new adventure', 'free');
+    if (reel_id) {
+      this.reelMeta.set(reel_id, { template_id: templateId, state: { ...(t?.default_state ?? { scene: '', outfit: '', co_star: 'nibbs', text: '' }) }, version: 1 });
+      this.saveMeta();
+    }
+    this.invalidateList();
+    this.emit();
     return { reel_id, version: 1, job_id };
   }
   async videoBlob(_url: string) { return null; }
@@ -185,8 +283,10 @@ export class WorkerApi implements DataApi {
   async setConsent(kind: ConsentKind, granted: boolean) {
     // The Worker consent endpoint records per-kid parent affirmations (name typed), not per-kind
     // toggles. Only the create consent is persisted there; the rest stay client-side for now.
+    // Route through createConsent so the sessionStorage cache is authoritative — a raw POST here
+    // would double-post /api/consent (e.g. PhotoLikenessCard ran first, Grownups toggles later).
     if (kind === 'create' && granted && this.kidId) {
-      await this.req('/api/consent', { method: 'POST', body: JSON.stringify({ kid_id: this.kidId, parent_name: this.kidName || 'Parent', others_consented: false }) });
+      await this.createConsent(this.kidName || 'Parent', false);
     }
     const c = this.consentList.find(c => c.kind === kind);
     const next = { kind, granted, updated_at: new Date().toISOString() };
@@ -207,7 +307,7 @@ export class WorkerApi implements DataApi {
   }
   onReels(cb: (r: Reel[]) => void) {
     this.subs.add(cb);
-    const t = setInterval(() => { this.reels().then(r => { if (r.some(x => x.status === 'queued' || x.status === 'rendering')) cb(r); }).catch(() => {}); }, 8000);
+    const t = setInterval(() => { this.invalidateList(); this.reels().then(r => { if (r.some(x => x.status === 'queued' || x.status === 'rendering')) cb(r); }).catch(() => {}); }, 8000);
     return () => { clearInterval(t); this.subs.delete(cb); };
   }
   private emit() { this.reels().then(r => this.subs.forEach(cb => cb(r))).catch(() => {}); }
