@@ -1,0 +1,40 @@
+name = "storybook-ai"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "storybook-ai"
+database_id = "local-d1-id"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "storybook-media"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "storybook-jobs"
+
+[[queues.consumers]]
+queue = "storybook-jobs"
+max_batch_size = 1
+max_retries = 3
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+ENABLE_WORKERS_AI = "1"
+ENABLE_OPENROUTER = "0"
+ENABLE_FAL = "0"
+KILL_SWITCH = "0"
+MOCK_PROVIDERS = "0"
+ALLOWED_ORIGIN = "https://lucklypriyansh-2.github.io"
+
+# The database_id / bucket_name / queue above are literal local placeholders. They are
+# valid names so `wrangler dev --local` loads, and deploy.sh treats them as "not yet
+# provisioned" (creates the real resources and replaces them). Local dev also reads
+# MOCK_PROVIDERS="1" and WORKER_SESSION_SECRET from .dev.vars (see .dev.vars.example).

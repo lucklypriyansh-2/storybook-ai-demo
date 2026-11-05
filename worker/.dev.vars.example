@@ -1,0 +1,6 @@
+# Copy to .dev.vars for `wrangler dev --local`. Never commit .dev.vars.
+# Local dev runs with mocked providers; these placeholders are not real keys.
+WORKER_SESSION_SECRET="local-dev-only-not-a-real-secret"
+MOCK_PROVIDERS="1"
+# OPENROUTER_API_KEY=""
+# FAL_KEY=""

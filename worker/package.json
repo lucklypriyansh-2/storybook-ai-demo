@@ -1,0 +1,19 @@
+{
+  "name": "storybook-ai-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --persist-to .mf",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "bash deploy.sh"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "miniflare": "latest",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0",
+    "wrangler": "latest"
+  }
+}

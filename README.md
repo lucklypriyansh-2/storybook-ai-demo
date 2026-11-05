@@ -4,7 +4,7 @@ Live app: https://lucklypriyansh-2.github.io/storybook-ai-demo/app/ · Privacy: 
 A mobile-first PWA where a child's cartoon avatar (no photos) stars in short vertical reels with Nibbs the dragon. Reels feed → Remake → end card → book reader, with a parent gate, unbundled consent, an Instagram draft queue and a mock paywall.
 
 ## What's real in v1
-- **Data**: a typed data layer (`src/data/types.ts` `DataApi`). v1 uses `LocalApi` = **IndexedDB on the device** (household-only). `SupabaseApi` (anonymous auth + RLS) swaps in automatically when `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` are set at build time.
+- **Data**: a typed data layer (`src/data/types.ts` `DataApi`). v1 uses `LocalApi` = **IndexedDB on the device** (household-only). `SupabaseApi` (anonymous auth + RLS) swaps in automatically when `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` are set at build time. **Cloud mode** (`WorkerApi`, talking to `worker/`) activates when `VITE_API_URL` is set at build time — higher priority than Supabase, and no keys are ever baked into the bundle. See `docs/ai-backend/BUDGET-SECURITY-DESIGN.md`.
 - **Rendering ($0, on device)**: `src/render/renderReel.ts` draws scene art (Ken Burns) + the trait avatar + co-star + burned-in captions on a canvas, mixes a generated lullaby with WebAudio, and records it with **MediaRecorder** (MP4/H.264 where supported, e.g. iPhone Safari and Chrome; WebM otherwise). The video Blob is stored in IndexedDB. Every edit = new reel version + render job.
 - **Share**: Save to phone / Share uses the Web Share API with the video file (download fallback).
 - **Publish**: only creates an Instagram **draft** in the publish queue. Nothing is posted.

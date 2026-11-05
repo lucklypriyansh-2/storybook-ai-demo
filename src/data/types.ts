@@ -17,9 +17,9 @@ export interface Settings { reels_per_day: number; bedtime_after: string; autopl
 export interface Household { id: string; kid: Kid; character: Character; settings: Settings }
 export interface RemakeResult { reel_id: string; version: number; job_id: string }
 
-/** The backend contract. Implemented by Supabase (real) and LocalApi (in-browser fallback, used only when env vars are missing). */
+/** The backend contract. Implemented by Supabase (real), WorkerApi (Cloudflare Worker), and LocalApi (in-browser fallback). */
 export interface DataApi {
-  readonly mode: 'supabase' | 'local';
+  readonly mode: 'supabase' | 'local' | 'worker';
   init(): Promise<Household>;
   household(): Promise<Household>;
   templates(): Promise<Template[]>;
