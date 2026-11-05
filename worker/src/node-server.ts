@@ -39,7 +39,22 @@ async function writeFetchResponse(res: ServerResponse, response: Response): Prom
   res.end(buf);
 }
 
+
+async function seedInviteIfConfigured(env: ReturnType<typeof getEnv>): Promise<void> {
+  const code = process.env.INVITE_SEED_CODE;
+  if (!code) return;
+  const maxUses = Number(process.env.INVITE_SEED_MAX_USES ?? "20");
+  await env.DB.prepare(
+    "INSERT OR REPLACE INTO invite_codes (code, max_uses, used_count, note) VALUES (?, ?, COALESCE((SELECT used_count FROM invite_codes WHERE code = ?), 0), ?)",
+  )
+    .bind(code, maxUses, code, "seed")
+    .run();
+}
+
 const env = getEnv();
+void seedInviteIfConfigured(env).catch(() => {
+  console.error("invite_seed_failed");
+});
 const port = Number(process.env.PORT ?? 8787);
 
 const server = createServer(async (req, res) => {
