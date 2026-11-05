@@ -70,8 +70,8 @@ export function Feed() {
       <div className="toptabs2">{(bedtimeForced ? (['bedtime'] as FeedTab[]) : (['for', 'bedtime', 'birthday'] as FeedTab[])).map(t =>
         <button key={t} className={`ptab${tab === t ? ' on' : ''}`} onClick={() => setTab(t)} aria-pressed={tab === t}>{t === 'for' ? `For ${s.name}` : t === 'bedtime' ? '🌙 Bedtime' : 'Birthday'}</button>)}</div>
       {idx < total && <><div className="eps2" aria-hidden>{list.map((_, i) => <i key={i} className={i < idx ? 'done' : ''}>{i === idx && <motion.b style={{ width: `${prog * 100}%` }} />}</i>)}</div>
-        <button className="sound" onClick={toggleSound} aria-label={muted ? 'Sound on' : 'Sound off'} aria-pressed={!muted}>{muted ? '🔇' : '🔊'}</button>
-        <div className="today" data-testid="today">TODAY · {Math.min(idx + 1, total)} OF {total}{night && <span className="calm">calm reels only</span>}</div></>}
+        <div className="today"><span data-testid="today">TODAY · {Math.min(idx + 1, total)} OF {total}</span>{night && <span className="calm">calm reels only</span>}
+          <button className="sound" onClick={toggleSound} aria-label={muted ? 'Sound on' : 'Sound off'} aria-pressed={!muted}>{muted ? '🔇 Sound' : '🔊 On'}</button></div></>}
     </div>
     <AnimatePresence>{remake && <RemakeSheet key="rm" reel={remake} onClose={() => setRemake(null)} />}</AnimatePresence>
     <AnimatePresence>{family && <FamilySheet key="fam" reel={family} onClose={() => setFamily(null)} />}</AnimatePresence>

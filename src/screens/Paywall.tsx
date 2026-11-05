@@ -15,7 +15,7 @@ export function Paywall() {
   const [pick, setPick] = useState('year');
   const [done, setDone] = useState(false);
   const loved = s.reels.filter(r => r.loved).length;
-  const head = s.arg === 'remakes' ? `${s.name} used all 10 remakes.` : s.arg === 'book' ? `Make ${s.name}'s book real?` : `${s.name} loved ${loved || 3} reels.`;
+  const head = s.arg === 'remakes' ? `${s.name} used all 10 remakes.` : s.arg === 'book' ? `Make ${s.name}'s book real?` : `${s.name} loved ${loved || 3} reel${(loved || 3) === 1 ? '' : 's'}.`;
   return <div className="body cream" data-testid="paywall">
     <div className="top"><button className="x" aria-label="Close" onClick={() => s.go('feed')}>✕</button><span className="spacer" /><span className="lock">Grown-ups only</span><span className="demo-tag">MOCK · NO PAYMENTS</span></div>
     <div className="row" style={{ alignItems: 'center', gap: 10 }}><Nibbs mood="idle" trigger="celebrate" width={86} /><h1 style={{ fontSize: 25, lineHeight: '30px' }}>{head} Keep the show going?</h1></div>
