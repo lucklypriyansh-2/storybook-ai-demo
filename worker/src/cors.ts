@@ -2,8 +2,9 @@ import type { Env } from "./env";
 
 export const DEFAULT_ALLOWED_ORIGIN = "https://lucklypriyansh-2.github.io";
 
-const ALLOW_METHODS = "GET, POST, OPTIONS";
-const ALLOW_HEADERS = "content-type, authorization";
+const ALLOW_METHODS = "GET, POST, PATCH, DELETE, OPTIONS";
+// x-admin-token is only ever sent by the operator CLI/manual bootstrap call.
+const ALLOW_HEADERS = "content-type, authorization, x-admin-token";
 
 function allowedOrigin(env: Env): string {
   return env.ALLOWED_ORIGIN ?? DEFAULT_ALLOWED_ORIGIN;

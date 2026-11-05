@@ -13,6 +13,10 @@ describe("CORS layer (H-4)", () => {
     expect(res!.headers.get("Access-Control-Allow-Origin")).toBe(DEFAULT_ALLOWED_ORIGIN);
     expect(res!.headers.get("Access-Control-Allow-Credentials")).toBe("true");
     expect(res!.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+    // Catalog page saves need PATCH/DELETE and the bootstrap header must survive preflight.
+    expect(res!.headers.get("Access-Control-Allow-Methods")).toContain("PATCH");
+    expect(res!.headers.get("Access-Control-Allow-Methods")).toContain("DELETE");
+    expect(res!.headers.get("Access-Control-Allow-Headers")).toContain("x-admin-token");
   });
 
   it("honors an ALLOWED_ORIGIN override", () => {

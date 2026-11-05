@@ -10,6 +10,15 @@ export interface Reel { id: string; template_id: string; state: ReelState; versi
 export interface ReelVersion { id: string; reel_id: string; version: number; state: ReelState; state_hash: string; status: ReelStatus; created_at: string }
 export interface RenderJob { id: string; reel_id: string; reel_version_id: string; status: 'queued' | 'rendering' | 'done' | 'failed'; attempts: number; created_at: string }
 export interface BookPage { text: string; image: string }
+/**
+ * Admin-curated catalog row (R.1.2). Every string here is PLACEHOLDER sample
+ * content owned by this product — no licensed IP is imported.
+ */
+export interface CatalogTemplate {
+  id: string; slug: string; title: string; cover: string | null; description: string;
+  age_band: string; tier_default: string; page_count: number; enabled: boolean;
+}
+export interface CatalogShot { index: number; caption_prompt: string; keyframe_prompt: string | null }
 export interface Book { id: string; reel_id: string | null; title: string; pages: BookPage[] }
 export interface Consent { kind: ConsentKind; granted: boolean; updated_at: string }
 export interface PublishItem { id: string; reel_id: string; reel_version_id: string; platform: 'instagram'; caption: string; status: 'draft' | 'approved' | 'posted' | 'failed' | 'cancelled'; created_at: string }

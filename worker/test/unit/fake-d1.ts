@@ -28,10 +28,20 @@ type JobRow = {
 };
 type PhotoRow = { id: string; user_id: string; r2_key: string; deleted_at: number | null };
 type CharacterRow = { id: string; kid_id: string; sheet_r2_key: string; model: string; created_at: number };
-type ReelRow = { id: string; user_id: string; kid_id: string; status: string; tier: string; story: string; created_at: number };
+type ReelRow = {
+  id: string; user_id: string; kid_id: string; status: string; tier: string; story: string;
+  created_at: number; template_id?: string | null; use_sheet?: number | null;
+};
 type ConsentRow = { id: string; user_id: string; kid_id: string };
 type UserRow = { id: string; is_admin: number; email_hash?: string };
 type SessionRow = { id: string; user_id: string; expires_at: number };
+type TemplateRow = {
+  id: string; slug: string; title: string; cover_key: string | null; description: string | null;
+  age_band: string; tier_default: string; page_count: number; enabled: number;
+  created_at: number; updated_at: number;
+};
+type ShotRow = { template_id: string; index: number; caption_prompt: string; keyframe_prompt: string | null };
+type PageOverrideRow = { reel_id: string; index: number; text: string | null; keyframe_key: string | null; updated_at: number };
 
 const norm = (sql: string) => sql.replace(/\s+/g, " ").trim();
 
@@ -49,9 +59,20 @@ export class FakeD1 {
   consents = new Map<string, ConsentRow>();
   users = new Map<string, UserRow>();
   sessions = new Map<string, SessionRow>();
+  templates = new Map<string, TemplateRow>();
+  shots = new Map<string, ShotRow>();
+  pageOverrides = new Map<string, PageOverrideRow>();
 
   getJob(id: string): JobRow | undefined {
     return this.jobs.get(id);
+  }
+
+  getTemplate(id: string): TemplateRow | undefined {
+    return this.templates.get(id);
+  }
+
+  getOverride(reelId: string, index: number): PageOverrideRow | undefined {
+    return this.pageOverrides.get(`${reelId}:${index}`);
   }
 
   prepare(sql: string): FakeStatement {
@@ -248,6 +269,12 @@ class FakeStatement {
       }
       return [[], 0];
     }
+    if (sql.startsWith("UPDATE users SET is_admin = 1 WHERE id = ?")) {
+      const row = db.users.get(String(args[0]));
+      if (!row) return [[], 0];
+      row.is_admin = 1;
+      return [[], 1];
+    }
     if (sql.startsWith("INSERT INTO sessions")) {
       const [id, user_id, expires_at] = args as [string, string, number, number];
       db.sessions.set(id, { id, user_id, expires_at });
@@ -344,6 +371,24 @@ class FakeStatement {
       db.characters.set(id, { id, kid_id, sheet_r2_key, model, created_at });
       return [[], 1];
     }
+    if (sql.startsWith("SELECT id FROM characters WHERE kid_id")) {
+      const kid_id = String(args[0]);
+      const row = [...db.characters.values()].find((c) => c.kid_id === kid_id);
+      return [row ? [{ id: row.id }] : [], 0];
+    }
+    if (sql.startsWith("SELECT COUNT(*) AS n FROM characters")) {
+      const kid_id = String(args[0]);
+      const n = [...db.characters.values()].filter((c) => c.kid_id === kid_id).length;
+      return [[{ n }], 0];
+    }
+    if (sql.startsWith("SELECT sheet_r2_key, created_at FROM characters")) {
+      const kid_id = String(args[0]);
+      const rows = [...db.characters.values()]
+        .filter((c) => c.kid_id === kid_id)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((c) => ({ sheet_r2_key: c.sheet_r2_key, created_at: c.created_at }));
+      return [rows.slice(0, 1), 0];
+    }
     if (sql.startsWith("SELECT sheet_r2_key FROM characters WHERE kid_id")) {
       const kid_id = String(args[0]);
       const rows = [...db.characters.values()]
@@ -378,19 +423,26 @@ class FakeStatement {
 
     // ---- reels ----
     if (sql.startsWith("INSERT INTO reels")) {
-      const [id, user_id, kid_id, tier, story, created_at] = args as [string, string, string, string, string, number];
-      db.reels.set(id, { id, user_id, kid_id, status: "queued", tier, story, created_at });
+      const [id, user_id, kid_id, tier, story, template_id, use_sheet, created_at] =
+        args as [string, string, string, string, string, string | null, number, number];
+      db.reels.set(id, { id, user_id, kid_id, status: "queued", tier, story, template_id, use_sheet, created_at });
       return [[], 1];
     }
     if (sql.startsWith("SELECT user_id, kid_id, tier, story FROM reels WHERE id")) {
       const row = db.reels.get(String(args[0]));
       return [row ? [{ user_id: row.user_id, kid_id: row.kid_id, tier: row.tier, story: row.story }] : [], 0];
     }
-    if (sql.startsWith("SELECT id, status, tier FROM reels WHERE id = ? AND user_id")) {
+    if (sql.startsWith("SELECT id, status, tier") && sql.includes("FROM reels WHERE id = ? AND user_id")) {
       const [id, user_id] = args as [string, string];
       const row = db.reels.get(id);
       if (!row || row.user_id !== user_id) return [[], 0];
-      return [[{ id: row.id, status: row.status, tier: row.tier }], 0];
+      return [[{ id: row.id, status: row.status, tier: row.tier, template_id: row.template_id ?? null }], 0];
+    }
+    if (sql.startsWith("SELECT id FROM reels WHERE id = ? AND user_id")) {
+      const [id, user_id] = args as [string, string];
+      const row = db.reels.get(id);
+      if (!row || row.user_id !== user_id) return [[], 0];
+      return [[{ id: row.id }], 0];
     }
     if (sql.startsWith("SELECT id FROM reels WHERE kid_id")) {
       const [kid_id, user_id] = args as [string, string];
@@ -497,6 +549,105 @@ class FakeStatement {
       if (!row) return [[], 0];
       row.progress = progress;
       return [[], 1];
+    }
+
+    // ---- story_templates (catalog) ----
+    if (sql.startsWith("INSERT INTO story_templates")) {
+      const [id, slug, title, cover_key, description, age_band, tier_default, page_count, enabled, created_at, updated_at] =
+        args as [string, string, string, string | null, string | null, string, string, number, number, number, number];
+      db.templates.set(id, {
+        id, slug, title, cover_key, description, age_band, tier_default, page_count, enabled, created_at, updated_at,
+      });
+      return [[], 1];
+    }
+    if (sql.startsWith("SELECT") && sql.includes("FROM story_templates")) {
+      let rows = [...db.templates.values()];
+      if (sql.includes("WHERE enabled = 1")) rows = rows.filter((t) => t.enabled === 1);
+      if (sql.includes("WHERE id = ?")) {
+        const row = db.templates.get(String(args[0]));
+        return [row ? [row] : [], 0];
+      }
+      if (sql.includes("WHERE slug = ?")) {
+        const row = rows.find((t) => t.slug === String(args[0]));
+        return [row ? [row] : [], 0];
+      }
+      rows.sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return [rows, 0];
+    }
+    if (sql.startsWith("UPDATE story_templates SET")) {
+      const id = String(args[args.length - 1]);
+      const row = db.templates.get(id);
+      if (!row) return [[], 0];
+      if (sql.startsWith("UPDATE story_templates SET updated_at = ?")) {
+        // Prompt-only edit: bump updated_at and nothing else.
+        row.updated_at = Number(args[0]);
+        return [[], 1];
+      }
+      // Every writable column is passed positionally in the SQL's own order.
+      const columns = [
+        "title", "slug", "cover_key", "description", "age_band", "tier_default", "page_count", "enabled",
+      ] as const;
+      let a = 0;
+      for (const column of columns) if (sql.includes(`${column} = ?`)) {
+        (row as unknown as Record<string, unknown>)[column] = args[a++];
+      }
+      row.updated_at = args[args.length - 2] as number;
+      return [[], 1];
+    }
+    if (sql.startsWith("DELETE FROM story_templates")) {
+      return [[], db.templates.delete(String(args[0])) ? 1 : 0];
+    }
+
+    // ---- story_template_shots ----
+    if (sql.startsWith("INSERT INTO story_template_shots")) {
+      const [template_id, index, caption_prompt, keyframe_prompt] =
+        args as [string, number, string, string | null];
+      const key = `${template_id}:${index}`;
+      if (db.shots.has(key) && sql.includes("ON CONFLICT")) {
+        const row = db.shots.get(key)!;
+        if (sql.includes("caption_prompt = excluded.caption_prompt")) row.caption_prompt = caption_prompt;
+        if (sql.includes("keyframe_prompt = excluded.keyframe_prompt")) row.keyframe_prompt = keyframe_prompt;
+        return [[], 1];
+      }
+      db.shots.set(key, { template_id, index, caption_prompt, keyframe_prompt });
+      return [[], 1];
+    }
+    if (sql.startsWith("SELECT template_id") && sql.includes("FROM story_template_shots")) {
+      const template_id = String(args[0]);
+      const rows = [...db.shots.values()].filter((s) => s.template_id === template_id).sort((a, b) => a.index - b.index);
+      return [rows, 0];
+    }
+    if (sql.startsWith("DELETE FROM story_template_shots")) {
+      let n = 0;
+      for (const [key, row] of db.shots) if (row.template_id === String(args[0])) { db.shots.delete(key); n++; }
+      return [[], n];
+    }
+
+    // ---- reel_page_overrides ----
+    if (sql.startsWith("INSERT INTO reel_page_overrides")) {
+      const [reel_id, index, text, , updated_at] = args as [string, number, string, null, number];
+      db.pageOverrides.set(`${reel_id}:${index}`, { reel_id, index, text, keyframe_key: null, updated_at });
+      return [[], 1];
+    }
+    if (sql.startsWith("SELECT") && sql.includes("FROM reel_page_overrides")) {
+      if (sql.includes("AND \"index\" = ?")) {
+        const row = db.pageOverrides.get(`${args[0]}:${args[1]}`);
+        return [row ? [{ text: row.text, keyframe_key: row.keyframe_key }] : [], 0];
+      }
+      const reel_id = String(args[0]);
+      const rows = [...db.pageOverrides.values()].filter((o) => o.reel_id === reel_id).sort((a, b) => a.index - b.index);
+      return [rows, 0];
+    }
+    if (sql.startsWith("UPDATE reel_page_overrides SET text")) {
+      const [text, updated_at, reel_id, index] = args as [string, number, string, number];
+      const row = db.pageOverrides.get(`${reel_id}:${index}`);
+      if (!row) return [[], 0];
+      row.text = text;
+      row.updated_at = updated_at;
+      return [[], 1];
+    }
+    if (sql.startsWith("DELETE FROM reel_page_overrides")) {
+      return [[], db.pageOverrides.delete(`${args[0]}:${args[1]}`) ? 1 : 0];
     }
 
     throw new Error(`FakeD1: unhandled SQL: ${sql}`);

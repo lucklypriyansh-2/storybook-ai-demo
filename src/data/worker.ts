@@ -1,11 +1,16 @@
 import { DEFAULT_LOOK, type Look } from '../mascot';
 import { SETTINGS_DEFAULTS, CONSENT_DEFAULTS } from './local';
-import { TEMPLATES, bookPages, fill } from './seed';
-import type { Book, Consent, ConsentKind, DataApi, Household, PublishItem, Reel, ReelState, ReelVersion, RenderJob, Settings } from './types';
+import { bookPages, fill } from './seed';
+import { allTemplates, templateById, templateFromCatalog } from './catalog';
+import { clearBookPage, saveBookPage } from './bookPages';
+import type { Book, CatalogShot, CatalogTemplate, Consent, ConsentKind, DataApi, Household, PublishItem, Reel, ReelState, ReelVersion, RenderJob, Settings, Template } from './types';
 
 /** Client-side metadata the Worker doesn't return yet (template + edited state per reel). */
 type ReelMeta = { template_id: string; state: ReelState; version: number };
 const META_KEY = 'sb.reelMeta.v1';
+
+/** Seed templates + placeholder catalog rows, de-duplicated. */
+const CATALOG_TEMPLATES = allTemplates();
 
 /** Error carrying the Worker's HTTP status + error code so the UI can map 402/429/401 to modals. */
 export class WorkerError extends Error {
@@ -16,6 +21,21 @@ export class WorkerError extends Error {
 }
 
 type JobRow = { id: string; type: string; status: string; progress: number; error?: string };
+
+/** A story_templates row as the Worker serialises it (cover is a signed URL or `local:` key). */
+type RowTemplate = {
+  id: string; slug: string; title: string; cover_url?: string | null; description: string;
+  age_band: string; tier_default: string; page_count: number; enabled: boolean;
+};
+
+function toCatalogTemplate(row: RowTemplate): CatalogTemplate {
+  return {
+    id: row.id, slug: row.slug, title: row.title,
+    cover: row.cover_url ?? null, description: row.description ?? '',
+    age_band: row.age_band, tier_default: row.tier_default,
+    page_count: row.page_count, enabled: row.enabled,
+  };
+}
 
 /** A kid as the Worker returns it (docs/ai-backend/BUDGET-SECURITY-DESIGN.md §6). */
 type WorkerKid = { id: string; display_name: string; has_sheet: boolean };
@@ -40,8 +60,13 @@ export class WorkerApi implements DataApi {
   }));
   private lastJobs: RenderJob[] = [];
   private subs = new Set<(r: Reel[]) => void>();
-  /** reel_id -> template/state/version the Worker doesn't persist for us yet. */
+  /** reel_id -> template/state/version. Catalog reels also learn their template from the Worker. */
   private reelMeta = new Map<string, ReelMeta>();
+  /** Catalog rows fetched this session (placeholder seeds are in the module-load snapshot). */
+  private catalogRows = new Map<string, CatalogTemplate>();
+  private catalogRowsLoaded = false;
+  /** Reel ids we already tried to hydrate, so a failed/foreign reel is not re-fetched forever. */
+  private hydratedReels = new Set<string>();
   /** Short-lived memo of the last `listReels()` snapshot so reels() + books() agree. */
   private lastList: { at: number; rows: WorkerReel[] } | null = null;
 
@@ -119,7 +144,13 @@ export class WorkerApi implements DataApi {
   }
   async me() { return this.req<{ user_id: string; is_admin: boolean }>('/api/auth/me'); }
   /** Provider flags from the Worker (used for honest HD/motion gating; never fakes availability). */
-  async health() { return this.req<{ ok: boolean; build: string; flags: { openrouter: boolean; fal: boolean; kill: boolean } }>('/api/health'); }
+  async health() {
+    return this.req<{
+      ok: boolean; build: string;
+      flags: { openrouter: boolean; fal: boolean; kill: boolean; ffmpeg: boolean | null };
+      sweep?: { interval_ms: number; tmp_max_age_ms: number };
+    }>('/api/health');
+  }
   async logout() { await this.req('/api/auth/logout', { method: 'POST' }); this.persistToken(''); }
 
   async init(): Promise<Household> {
@@ -184,12 +215,164 @@ export class WorkerApi implements DataApi {
     return reels;
   }
   async getReel(id: string) {
-    return this.req<{ id: string; status: string; tier: string; shots: { index: number; caption: string }[] }>(`/api/reels/${id}`);
+    return this.req<{
+      id: string; status: string; tier: string; template_id?: string | null;
+      shots: { index: number; caption: string; edited?: boolean; keyframe_url?: string | null; video_url?: string | null }[];
+    }>(`/api/reels/${id}`);
   }
   async generateReel(story: string, tier: 'free' | 'paid' | 'hd', kidId = this.kidId) {
     return this.req<{ reel_id: string; job_id: string }>('/api/reels', {
       method: 'POST', body: JSON.stringify({ kid_id: kidId, story, tier }),
     });
+  }
+
+  // ---- catalog (R.1): public browse feed + detail, admin-editable server-side ----
+  /** Enabled catalog templates. Anything without a cover falls back to a bundled placeholder. */
+  async catalog(): Promise<CatalogTemplate[]> {
+    const { templates } = await this.req<{ templates: RowTemplate[] }>('/api/catalog');
+    const rows = templates.map(toCatalogTemplate);
+    for (const row of rows) this.catalogRows.set(row.id, row);
+    return rows;
+  }
+  async catalogDetail(id: string): Promise<{ template: CatalogTemplate; shots: CatalogShot[] }> {
+    const out = await this.req<{ template: RowTemplate; shots: CatalogShot[] }>(`/api/catalog/${encodeURIComponent(id)}`);
+    return { template: toCatalogTemplate(out.template), shots: out.shots ?? [] };
+  }
+
+  /** Cached catalog row for a template id — module seed first, else a live fetch. */
+  private async resolveTemplate(templateId: string): Promise<Template | undefined> {
+    const local = templateById(templateId);
+    if (local) return local;
+    const row = this.catalogRows.get(templateId);
+    if (row) return templateFromCatalog(row);
+    try {
+      const detail = await this.catalogDetail(templateId);
+      this.catalogRows.set(templateId, detail.template);
+      return templateFromCatalog(detail.template);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Every catalog row the server knows about, seeded into the local row cache.
+   * Fetched at most once per session (review #2/#13); unknown ids still fall back
+   * to a per-id `catalogDetail` in resolveTemplate().
+   */
+  private async loadCatalogRows(): Promise<void> {
+    if (this.catalogRowsLoaded) return;
+    this.catalogRowsLoaded = true;
+    try {
+      for (const row of await this.catalog()) this.catalogRows.set(row.id, row);
+    } catch { this.catalogRowsLoaded = false; /* offline: retry on a later call */ }
+  }
+
+  /**
+   * Generates a reel from a catalog template (R.1.4). The Worker owns the
+   * template's title and shot prompts; `story` is only sent on the legacy path.
+   */
+  async generateFromTemplate(templateId: string, tier: 'free' | 'paid' | 'hd', kidId = this.kidId, useSheet = true) {
+    const out = await this.req<{ reel_id: string; job_id: string }>('/api/reels', {
+      method: 'POST',
+      body: JSON.stringify({ kid_id: kidId, template_id: templateId, tier, use_sheet: useSheet }),
+    });
+    // Remember which catalog template this reel came from so books()/title() work
+    // even before the server row is visible to the client.
+    const t = await this.resolveTemplate(templateId);
+    this.reelMeta.set(out.reel_id, {
+      template_id: templateId,
+      state: { ...(t?.default_state ?? { scene: '', outfit: '', co_star: 'nibbs', text: '' }) },
+      version: 1,
+    });
+    this.saveMeta();
+    this.invalidateList();
+    this.emit();
+    return out;
+  }
+
+  /**
+   * Hydrates template/state metadata from the Worker's persisted `template_id`
+   * (catalog path). Runs on every `reels()` for rows still missing meta, so a
+   * reel that lands later (another tab, a background job completing) still gets a
+   * book — the empty/partial first load no longer freezes hydration (review #3).
+   * A reel is only marked hydrated once its row is known; a transient failure
+   * leaves it eligible for a retry on the next call.
+   */
+  private async hydrateCatalogTemplates(rows: WorkerReel[]): Promise<void> {
+    const targets = rows
+      .filter(r => !this.reelMeta.has(r.id) && !this.hydratedReels.has(r.id))
+      .slice(0, 10);
+    if (targets.length === 0) return;
+    await Promise.all(targets.map(async (r) => {
+      let reel: Awaited<ReturnType<WorkerApi['getReel']>>;
+      try { reel = await this.getReel(r.id); }
+      catch { return; /* transient: retry on the next reels() call */ }
+      this.hydratedReels.add(r.id);
+      const templateId = reel.template_id;
+      if (!templateId) return;
+      const t = await this.resolveTemplate(templateId);
+      this.reelMeta.set(r.id, {
+        template_id: templateId,
+        state: { ...(t?.default_state ?? { scene: '', outfit: '', co_star: 'nibbs', text: '' }) },
+        version: 1,
+      });
+    }));
+    this.saveMeta();
+  }
+
+  // ---- per-page book text (R.5): client localStorage + server override ----
+  /** Saves page text locally (always) and to the server override (best effort). */
+  async saveBookPageText(reelId: string, bookId: string, index: number, text: string): Promise<{ saved: boolean; server: boolean }> {
+    saveBookPage(bookId, index, text);
+    try {
+      await this.req(`/api/reels/${encodeURIComponent(reelId)}/pages/${index}`, {
+        method: 'PATCH', body: JSON.stringify({ text }),
+      });
+      return { saved: true, server: true };
+    } catch {
+      // Offline / server rejected: the local copy still holds the edit.
+      return { saved: true, server: false };
+    }
+  }
+  /** Reverts a page to the template text (clears both copies). */
+  async resetBookPage(reelId: string, bookId: string, index: number): Promise<{ ok: boolean }> {
+    clearBookPage(bookId, index);
+    try { await this.req(`/api/reels/${encodeURIComponent(reelId)}/pages/${index}`, { method: 'DELETE' }); }
+    catch { /* server copy may not exist; local reset already applied */ }
+    return { ok: true };
+  }
+
+  // ---- admin catalog (R.2, requireAdmin server-side) ----
+  async adminTemplates(): Promise<CatalogTemplate[]> {
+    const { templates } = await this.req<{ templates: RowTemplate[] }>('/api/admin/templates');
+    return templates.map(toCatalogTemplate);
+  }
+  /** One template plus its per-shot prompts, for the admin editor (A-03). */
+  async adminTemplateDetail(id: string): Promise<{ template: CatalogTemplate; shots: CatalogShot[] }> {
+    const out = await this.req<{ template: RowTemplate; shots: CatalogShot[] }>(
+      `/api/admin/templates/${encodeURIComponent(id)}`,
+    );
+    return { template: toCatalogTemplate(out.template), shots: out.shots ?? [] };
+  }
+  async adminCreateTemplate(patch: Partial<CatalogTemplate> & { title: string }) {
+    return this.req<{ template: RowTemplate }>('/api/admin/templates', {
+      method: 'POST', body: JSON.stringify(patch),
+    });
+  }
+  /**
+   * Partial template update. `scene_prompts` carries per-shot prompt edits and is
+   * sent as-is; the Worker upserts them keyed by (template_id, index).
+   */
+  async adminUpdateTemplate(
+    id: string,
+    patch: Partial<CatalogTemplate> & { scene_prompts?: { index: number; caption_prompt?: string; keyframe_prompt?: string | null }[] },
+  ) {
+    return this.req<{ template: RowTemplate }>(`/api/admin/templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: JSON.stringify(patch),
+    });
+  }
+  async adminDeleteTemplate(id: string) {
+    return this.req<{ ok: boolean }>(`/api/admin/templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
   private mapStatus(status: string): Reel['status'] {
@@ -200,14 +383,19 @@ export class WorkerApi implements DataApi {
   }
 
   // ---- DataApi surface ----
-  async templates() { return TEMPLATES; }
+  async templates(): Promise<Template[]> { return CATALOG_TEMPLATES; }
   async reels(): Promise<Reel[]> {
     const rows = await this.getList();
     // Drop metadata for reels the server no longer returns (deleted elsewhere/other device).
     const live = new Set(rows.map(r => r.id));
     let pruned = false;
     for (const id of [...this.reelMeta.keys()]) if (!live.has(id)) { this.reelMeta.delete(id); pruned = true; }
+    for (const id of [...this.hydratedReels]) if (!live.has(id)) this.hydratedReels.delete(id);
     if (pruned) this.saveMeta();
+    // Learn template_id for catalog-created reels the Worker persisted. Runs while
+    // any row is still un-hydrated (not a one-shot process memo) so later reels
+    // are not silently skipped.
+    await this.hydrateCatalogTemplates(rows);
     return rows.map(r => this.toReel(r));
   }
   private toReel(r: WorkerReel): Reel {
@@ -229,21 +417,34 @@ export class WorkerApi implements DataApi {
     return [{ id: `${id}:${r.version}`, reel_id: id, version: r.version, state: r.state, state_hash: '', status: r.status, created_at: r.created_at }];
   }
   async jobs() { return this.lastJobs; }
-  /** Books derived from the cached server reel list + local metadata (cheap, no fetch). */
+  /**
+   * Books derived from the cached server reel list + local metadata. Catalog rows
+   * are resolved live (seeds first, then the operator's catalog) so an
+   * admin-added template produces a book instead of being silently skipped (#2).
+   */
   async books(): Promise<Book[]> {
     const rows = await this.getList();
+    // Make sure template bindings are loaded even if books() runs before reels().
+    await this.hydrateCatalogTemplates(rows);
+    // Anything the local snapshot doesn't know about (admin-added rows) needs the
+    // server catalog. Fetch it once per session; if it is unavailable, fall
+    // through to the local seeds so placeholder books keep working offline.
+    if (rows.some(r => this.reelMeta.get(r.id) && !templateById(this.reelMeta.get(r.id)!.template_id))) {
+      await this.loadCatalogRows();
+    }
     const out: Book[] = [];
     for (const r of rows) {
       const meta = this.reelMeta.get(r.id);
       if (!meta) continue; // unknown source (e.g. created on another device) → don't invent a book
-      const t = TEMPLATES.find(t => t.id === meta.template_id);
+      const t = await this.resolveTemplate(meta.template_id);
       if (!t) continue;
-      out.push({
+      const book: Book = {
         id: `book:${r.id}`,
         reel_id: r.id,
         title: fill(t.book_title, this.kidName || 'Mira'),
         pages: bookPages(t, this.kidName || 'Mira', meta.state),
-      });
+      };
+      out.push(book);
     }
     // rows() already arrive newest-first (server ORDER BY created_at DESC), matching Feed order.
     return out;
@@ -252,7 +453,7 @@ export class WorkerApi implements DataApi {
   async setSaved(id: string, v: boolean) { this.saved.set(id, v); }
   async remake(id: string, state: ReelState) {
     const prev = this.reelMeta.get(id);
-    const t = prev ? TEMPLATES.find(t => t.id === prev.template_id) : undefined;
+    const t = prev ? templateById(prev.template_id) : undefined;
     // Align the Worker's `story` with the edited line where possible (non-breaking).
     const { reel_id, job_id } = await this.generateReel(state.text || t?.title || 'A new adventure', 'free');
     const version = (prev?.version ?? 1) + 1;
@@ -268,7 +469,7 @@ export class WorkerApi implements DataApi {
     return { reel_id: target, version, job_id };
   }
   async createReel(templateId: string) {
-    const t = TEMPLATES.find(t => t.id === templateId);
+    const t = templateById(templateId);
     const { reel_id, job_id } = await this.generateReel(t?.title ?? 'A new adventure', 'free');
     if (reel_id) {
       this.reelMeta.set(reel_id, { template_id: templateId, state: { ...(t?.default_state ?? { scene: '', outfit: '', co_star: 'nibbs', text: '' }) }, version: 1 });

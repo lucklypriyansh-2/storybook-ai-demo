@@ -5,9 +5,24 @@ import { TEMPLATES, bookPages } from '../src/data/seed';
 const META_KEY = 'sb.reelMeta.v1';
 
 /** Minimal fetch stub over a mutable server reel list that mirrors the Worker routes we use. */
-function installFetch(rows: { id: string; status: string; tier: string; created_at: number }[]) {
+function installFetch(
+  rows: { id: string; status: string; tier: string; created_at: number }[],
+  opts: {
+    templateByReel?: (id: string) => string | null;
+    catalog?: { id: string; slug: string; title: string; cover_url: string | null; description: string; age_band: string; tier_default: string; page_count: number; enabled: boolean }[];
+  } = {},
+) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
+    if (u.endsWith('/api/catalog')) {
+      return new Response(JSON.stringify({ templates: opts.catalog ?? [] }), { status: 200 });
+    }
+    if (u.includes('/api/catalog/')) {
+      const id = decodeURIComponent(u.split('/api/catalog/')[1]!);
+      const template = (opts.catalog ?? []).find(t => t.id === id);
+      if (!template) return new Response(JSON.stringify({ error: 'template_not_found' }), { status: 404 });
+      return new Response(JSON.stringify({ template, shots: [] }), { status: 200 });
+    }
     if (u.endsWith('/api/reels') && (init?.method ?? 'GET') === 'GET') {
       return new Response(JSON.stringify({ reels: rows }), { status: 200 });
     }
@@ -15,6 +30,12 @@ function installFetch(rows: { id: string; status: string; tier: string; created_
       const id = 'reel-' + (rows.length + 1);
       rows.unshift({ id, status: 'queued', tier: 'free', created_at: Date.now() });
       return new Response(JSON.stringify({ reel_id: id, job_id: 'job-' + id }), { status: 200 });
+    }
+    // GET /api/reels/:id — the hydration route; echoes the template the server persisted.
+    const reelMatch = u.match(/\/api\/reels\/([^/]+)$/);
+    if (reelMatch) {
+      const id = decodeURIComponent(reelMatch[1]!);
+      return new Response(JSON.stringify({ id, status: 'done', tier: 'free', template_id: opts.templateByReel?.(id) ?? null, shots: [] }), { status: 200 });
     }
     return new Response(JSON.stringify({}), { status: 200 });
   });
@@ -133,5 +154,60 @@ describe('WorkerApi client metadata map (T3–T5)', () => {
     await api.createConsent('Priya', false);
     await api.setConsent('create', true);
     expect(calls.filter(u => u.endsWith('/api/consent'))).toHaveLength(1);
+  });
+});
+
+describe('Admin-added templates still produce books (review #2)', () => {
+  it('resolves an operator-created template via the live catalog instead of skipping it', async () => {
+    const rows = [{ id: 'r1', status: 'done', tier: 'free', created_at: 5 }];
+    installFetch(rows, {
+      templateByReel: () => 'tpl_custom',
+      catalog: [{ id: 'tpl_custom', slug: 'custom', title: '{name} and the Sleepy Fox', cover_url: null, description: 'PLACEHOLDER', age_band: '3-5', tier_default: 'free', page_count: 6, enabled: true }],
+    });
+    const api = new WorkerApi('https://w.test');
+
+    // The reel exists server-side but the client has no local meta yet.
+    const books = await api.books();
+    expect(books).toHaveLength(1);
+    expect(books[0]!.reel_id).toBe('r1');
+    expect(books[0]!.title).toBe('Mira and the Sleepy Fox');
+    expect(books[0]!.pages.length).toBeGreaterThan(0);
+  });
+
+  it('fetches the catalog once per session for admin rows', async () => {
+    const rows = [{ id: 'r1', status: 'done', tier: 'free', created_at: 5 }];
+    const fetchMock = installFetch(rows, {
+      templateByReel: () => 'tpl_custom',
+      catalog: [{ id: 'tpl_custom', slug: 'custom', title: '{name} and the Sleepy Fox', cover_url: null, description: 'PLACEHOLDER', age_band: '3-5', tier_default: 'free', page_count: 6, enabled: true }],
+    });
+    const api = new WorkerApi('https://w.test');
+    await api.books();
+    await api.books();
+    expect(fetchMock.mock.calls.filter(c => String(c[0]).endsWith('/api/catalog'))).toHaveLength(1);
+  });
+});
+
+describe('Catalog hydration is not a one-shot process memo (review #3)', () => {
+  it('hydrates a reel that appears after an initially-empty list', async () => {
+    const rows: { id: string; status: string; tier: string; created_at: number }[] = [];
+    installFetch(rows, { templateByReel: () => 'tpl_lighthouse_mouse' });
+    const api = new WorkerApi('https://w.test');
+
+    // First load: nothing yet (fresh signup). This must not freeze hydration.
+    expect(await api.reels()).toEqual([]);
+    expect(await api.books()).toEqual([]);
+
+    // A reel lands later (another tab / background job completes).
+    rows.push({ id: 'late', status: 'done', tier: 'free', created_at: 9 });
+    (api as unknown as { lastList: unknown }).lastList = null;
+
+    const reels = await api.reels();
+    expect(reels).toHaveLength(1);
+    expect(reels[0]!.template_id).toBe('tpl_lighthouse_mouse');
+
+    const books = await api.books();
+    expect(books).toHaveLength(1);
+    expect(books[0]!.reel_id).toBe('late');
+    expect(books[0]!.title).toBe('Mira and the Lighthouse Mouse');
   });
 });

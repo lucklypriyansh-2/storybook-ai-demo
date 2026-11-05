@@ -7,8 +7,9 @@ import { COSTS } from "../config/costs";
 import { maybeRunInline } from "../jobs/inline";
 import { livePaid } from "../providers";
 import { deleteObject, deletePrefix } from "../storage/r2";
+import { mediaUrl } from "../storage/signed";
 import { readJson, requireString } from "../util/http";
-import { BadRequest, Forbidden, KillSwitchOn, NotFound } from "../util/errors";
+import { ApiError, BadRequest, Forbidden, KillSwitchOn, NotFound } from "../util/errors";
 import { uuid } from "../util/uuid";
 
 export async function list({ env, req }: Ctx): Promise<Response> {
@@ -83,6 +84,43 @@ export async function forget({ env, req, params }: Ctx): Promise<Response> {
   ]);
 
   return Response.json({ ok: true, deleted: { r2: r2Deleted, rows: 1 + reels.results.length } });
+}
+
+/**
+ * R.3.1 visible AI-avatar preview. Returns the latest character sheet as a
+ * signed 1h URL (same scheme as reel keyframes). A row without a stored blob —
+ * or no row at all — 404s so the SPA keeps its honest "coming shortly" state.
+ */
+export async function characterSheetRead({ env, req, params }: Ctx): Promise<Response> {
+  const session = await requireSession(env, req);
+  const kidId = params.id ?? "";
+  const kid = await env.DB.prepare(
+    "SELECT id FROM kids WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+  )
+    .bind(kidId, session.user_id)
+    .first<{ id: string }>();
+  if (!kid) throw new NotFound("kid_not_found");
+
+  const row = await env.DB.prepare(
+    "SELECT sheet_r2_key, created_at FROM characters WHERE kid_id = ? ORDER BY created_at DESC LIMIT 1",
+  )
+    .bind(kidId)
+    .first<{ sheet_r2_key: string; created_at: number }>();
+
+  const stored = row?.sheet_r2_key ? await env.R2.get(row.sheet_r2_key) : null;
+  if (!row || !stored) throw new ApiError(404, "no_character_sheet");
+
+  const count = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM characters WHERE kid_id = ?",
+  )
+    .bind(kidId)
+    .first<{ n: number }>();
+
+  return Response.json({
+    sheet_url: await mediaUrl(env, row.sheet_r2_key),
+    version: count?.n ?? 1,
+    updated_at: new Date(row.created_at).toISOString(),
+  });
 }
 
 export async function characterSheet({ env, req, params }: Ctx): Promise<Response> {
