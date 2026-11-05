@@ -13,6 +13,7 @@ export const INVITE_LIMITS = { perHour: 20 } as const;
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const TMP_MAX_AGE_MS = 60_000;
+export const MIN_PHOTO_BYTES = 2 * 1024; // Google image models reject tiny/placeholder images
 export const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 export const PHOTO_MIME_ALLOWLIST = ["image/jpeg", "image/png", "image/webp"] as const;
 

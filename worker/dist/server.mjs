@@ -197,6 +197,7 @@ var DAILY_LIMITS = {
 var INVITE_LIMITS = { perHour: 20 };
 var SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1e3;
 var TMP_MAX_AGE_MS = 6e4;
+var MIN_PHOTO_BYTES = 2 * 1024;
 var MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 var PHOTO_MIME_ALLOWLIST = ["image/jpeg", "image/png", "image/webp"];
 function capFor(provider) {
@@ -608,7 +609,16 @@ async function call(apiKey, body, fetchImpl) {
     },
     body: JSON.stringify(body)
   });
-  if (!res.ok) throw new Error(`openrouter_http_${res.status}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const errBody = await res.json();
+      detail = errBody.error?.metadata?.raw || errBody.error?.message || "";
+      detail = detail.replace(/\s+/g, " ").slice(0, 160);
+    } catch {
+    }
+    throw new Error(detail ? `openrouter_http_${res.status}:${detail}` : `openrouter_http_${res.status}`);
+  }
   return await res.json();
 }
 function imageFromResponse(resp) {
@@ -1516,7 +1526,8 @@ async function upload({ env: env2, req }) {
   const form = await req.formData().catch(() => null);
   const file = form?.get("photo");
   if (!(file instanceof File)) throw new BadRequest("photo_required");
-  if (file.size === 0 || file.size > MAX_PHOTO_BYTES) throw new BadRequest("photo_too_large");
+  if (file.size < MIN_PHOTO_BYTES) throw new BadRequest("photo_too_small");
+  if (file.size > MAX_PHOTO_BYTES) throw new BadRequest("photo_too_large");
   if (!PHOTO_MIME_ALLOWLIST.includes(file.type)) {
     throw new BadRequest("photo_type_not_allowed");
   }

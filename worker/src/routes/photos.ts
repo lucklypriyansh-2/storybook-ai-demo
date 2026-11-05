@@ -1,6 +1,6 @@
 import type { Ctx } from "../router";
 import { requireSession } from "../auth/middleware";
-import { MAX_PHOTO_BYTES, PHOTO_MIME_ALLOWLIST } from "../config/limits";
+import { MAX_PHOTO_BYTES, MIN_PHOTO_BYTES, PHOTO_MIME_ALLOWLIST } from "../config/limits";
 import { putTmp } from "../storage/r2";
 import { BadRequest } from "../util/errors";
 import { uuid } from "../util/uuid";
@@ -11,7 +11,8 @@ export async function upload({ env, req }: Ctx): Promise<Response> {
   const form = await req.formData().catch(() => null);
   const file = form?.get("photo");
   if (!(file instanceof File)) throw new BadRequest("photo_required");
-  if (file.size === 0 || file.size > MAX_PHOTO_BYTES) throw new BadRequest("photo_too_large");
+  if (file.size < MIN_PHOTO_BYTES) throw new BadRequest("photo_too_small");
+  if (file.size > MAX_PHOTO_BYTES) throw new BadRequest("photo_too_large");
   if (!(PHOTO_MIME_ALLOWLIST as readonly string[]).includes(file.type)) {
     throw new BadRequest("photo_type_not_allowed");
   }

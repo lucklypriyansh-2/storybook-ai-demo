@@ -52,7 +52,17 @@ async function call(
     },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`openrouter_http_${res.status}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const errBody = (await res.json()) as { error?: { message?: string; metadata?: { raw?: string } } };
+      detail = errBody.error?.metadata?.raw || errBody.error?.message || "";
+      detail = detail.replace(/\s+/g, " ").slice(0, 160);
+    } catch {
+      /* ignore parse failures */
+    }
+    throw new Error(detail ? `openrouter_http_${res.status}:${detail}` : `openrouter_http_${res.status}`);
+  }
   return (await res.json()) as ChatResponse;
 }
 
