@@ -9,7 +9,7 @@ interface DB { household: Household; reels: Reel[]; versions: ReelVersion[]; job
 const KEY = 'db.v1';
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
 const now = () => new Date().toISOString();
-export const CONSENT_DEFAULTS: Record<ConsentKind, boolean> = { create: true, family_share: true, ai_training: false, marketing: false, publish_social: false };
+export const CONSENT_DEFAULTS: Record<ConsentKind, boolean> = { create: true, family_share: false, ai_training: false, marketing: false, publish_social: false };
 export const SETTINGS_DEFAULTS: Settings = { reels_per_day: 6, bedtime_after: '19:30', autoplay: false, bedtime_mode: false, remake_enabled: true };
 
 export function validateState(s: ReelState) {
@@ -29,7 +29,12 @@ export class LocalApi implements DataApi {
 
   async init() {
     const existing = this.mem ?? (await kv.get<DB>(KEY));
-    if (existing) { this.mem = existing; return existing.household; }
+    if (existing) { // merge defaults added later; un-wedge jobs interrupted by a reload
+      for (const k of Object.keys(CONSENT_DEFAULTS) as ConsentKind[]) if (!existing.consents.find(c => c.kind === k)) existing.consents.push({ kind: k, granted: CONSENT_DEFAULTS[k], updated_at: now() });
+      existing.household.settings = { ...SETTINGS_DEFAULTS, ...existing.household.settings };
+      for (const j of existing.jobs) if (j.status === 'rendering') { j.status = 'queued'; const r = existing.reels.find(r => r.id === j.reel_id); if (r && r.status === 'rendering') r.status = 'queued'; }
+      this.mem = existing; await this.save(existing); return existing.household;
+    }
     const kid = { id: uid(), display_name: DEFAULT_KID, age_band: '4-6' };
     const household: Household = { id: uid(), kid, character: { id: uid(), kid_id: kid.id, look: { ...DEFAULT_LOOK } }, settings: { ...SETTINGS_DEFAULTS } };
     const db: DB = { household, reels: [], versions: [], jobs: [], books: [], publish: [],
@@ -102,7 +107,7 @@ export class LocalApi implements DataApi {
   async nextJob() { return this.mem?.jobs.find(j => j.status === 'queued') ?? null; }
   async jobContext(j: RenderJob) { const d = this.db(); const v = d.versions.find(v => v.id === j.reel_version_id)!; const r = d.reels.find(r => r.id === j.reel_id)!; return { version: v, reel: r, template: TEMPLATES.find(t => t.id === r.template_id)!, household: d.household }; }
   async markJob(id: string, status: RenderJob['status'], blob?: Blob, error?: string) {
-    if (blob) await kv.set('video:' + id, blob);
+    if (blob) await kv.set('video:' + id, { type: blob.type || 'video/mp4', buf: await blob.arrayBuffer() });
     await this.mut(d => {
       const j = d.jobs.find(j => j.id === id); if (!j) return; j.status = status; if (status === 'rendering') j.attempts += 1; if (error) (j as RenderJob & { error?: string }).error = error;
       const v = d.versions.find(v => v.id === j.reel_version_id); const r = d.reels.find(r => r.id === j.reel_id);
@@ -112,6 +117,10 @@ export class LocalApi implements DataApi {
     });
     this.emit();
   }
-  async videoBlob(url: string) { return url.startsWith('idb:') ? ((await kv.get<Blob>('video:' + url.slice(4))) ?? null) : null; }
+  async videoBlob(url: string) {
+    if (!url.startsWith('idb:')) return null;
+    const v = await kv.get<{ type: string; buf: ArrayBuffer } | Blob>('video:' + url.slice(4)); if (!v) return null;
+    return v instanceof Blob ? v : new Blob([v.buf], { type: v.type });
+  }
   onReels(cb: (r: Reel[]) => void) { this.subs.add(cb); return () => { this.subs.delete(cb); }; }
 }

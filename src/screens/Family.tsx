@@ -18,7 +18,7 @@ export function FamilySheet({ reel, onClose }: { reel: Reel; onClose: () => void
     if (!file) return;
     const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
     if (nav.share && nav.canShare?.({ files: [file] })) { try { await nav.share({ files: [file], title: s.title(reel) }); return; } catch { /* cancelled */ return; } }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+    const u = URL.createObjectURL(file); const a = document.createElement('a'); a.href = u; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1500);
     s.toast('⬇️ Video downloaded');
   };
   const publish = async () => {

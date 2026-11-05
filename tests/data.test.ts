@@ -12,7 +12,7 @@ describe('local data layer (IndexedDB-backed, mirrors SQL RPCs)', () => {
     expect((await a.reels()).length).toBe(TEMPLATES.length);
     expect((await a.books()).length).toBe(TEMPLATES.length);
     const c = Object.fromEntries((await a.consents()).map(x => [x.kind, x.granted]));
-    expect(c).toEqual({ create: true, family_share: true, ai_training: false, marketing: false, publish_social: false });
+    expect(c).toEqual({ create: true, family_share: false, ai_training: false, marketing: false, publish_social: false });
   });
   it('remake writes a new version + queued render job and resets video', async () => {
     const a = new LocalApi(); await a.init(); const [r] = await a.reels();

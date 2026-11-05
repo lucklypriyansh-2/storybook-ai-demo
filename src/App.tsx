@@ -1,4 +1,5 @@
 import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
+import { useEffect } from 'react';
 import { img } from './motion';
 import { ONBOARD_KEY, StoreProvider, useStore, type Route } from './store';
 import { Btn } from './ui';
@@ -49,7 +50,7 @@ function Screen({ r }: { r: Route }) {
     default: return <Feed />;
   }
 }
-function FirstMake() { localStorage.setItem(ONBOARD_KEY, '1'); return <Make first />; }
+function FirstMake() { useEffect(() => { localStorage.setItem(ONBOARD_KEY, '1'); }, []); return <Make first />; }
 
 function Welcome() {
   const s = useStore();

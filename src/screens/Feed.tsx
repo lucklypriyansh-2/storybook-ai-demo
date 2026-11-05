@@ -33,6 +33,8 @@ export function Feed() {
   const [family, setFamily] = useState<Reel | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const night = tab === 'bedtime';
+  const [muted, setMuted] = useState(() => localStorage.getItem('starringme.sound') !== 'on');
+  const toggleSound = () => { const m = !muted; setMuted(m); localStorage.setItem('starringme.sound', m ? 'off' : 'on'); };
 
   useEffect(() => { setIdx(0); setEnded(null); box.current?.scrollTo({ top: 0 }); }, [tab]);
   useEffect(() => {
@@ -40,7 +42,7 @@ export function Feed() {
     const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { const i = Number((e.target as HTMLElement).dataset.i); setIdx(i); setProg(0); setEnded(null); } }), { root: el, threshold: 0.6 });
     el.querySelectorAll('[data-i]').forEach(n => io.observe(n));
     return () => io.disconnect();
-  }, [total, tab]);
+  }, [list.map(r => r.id).join(), tab]);
   const scrollTo = (i: number) => { const el = box.current; if (!el) return; el.scrollTo({ top: i * el.clientHeight, behavior: 'smooth' }); };
   useEffect(() => {
     const k = (e: KeyboardEvent) => { if (s.gate || remake || family) return; if (e.key === 'ArrowDown') { e.preventDefault(); scrollTo(Math.min(idx + 1, total)); } if (e.key === 'ArrowUp') { e.preventDefault(); scrollTo(Math.max(idx - 1, 0)); } };
@@ -52,14 +54,14 @@ export function Feed() {
     const nv = !r.loved;
     s.setReels(s.reels.map(x => (x.id === r.id ? { ...x, loved: nv } : x)));
     await s.api.setLoved(r.id, nv);
-    if (nv && loveCount + 1 === 3 && !sessionStorage.getItem('pw.seen')) { sessionStorage.setItem('pw.seen', '1'); setTimeout(() => s.go('paywall', 'loved'), 900); }
+    if (nv && loveCount + 1 === 3 && !localStorage.getItem('starringme.pw.seen')) { localStorage.setItem('starringme.pw.seen', '1'); setTimeout(() => s.go('paywall', 'loved'), 900); }
   };
   const save = async (r: Reel) => { const nv = !r.saved; s.setReels(s.reels.map(x => (x.id === r.id ? { ...x, saved: nv } : x))); await s.api.setSaved(r.id, nv); s.toast(nv ? '🔖 Saved to your Shelf' : 'Removed from Shelf'); };
   const book = (r: Reel) => { const b = s.books.find(b => b.reel_id === r.id); if (b) s.go('book', b.id); };
 
   return <div className={`feed-wrap${night ? ' night-mode' : ''}`} data-testid="feed" data-tab={tab}>
     <div className="feed" ref={box} data-testid="feed-scroller">
-      {list.map((r, i) => <Slide key={r.id} r={r} i={i} active={i === idx} night={night} onProg={setProg} onEnd={() => setEnded(r.id)}
+      {list.map((r, i) => <Slide key={r.id} r={r} i={i} active={i === idx} night={night} muted={muted} onProg={setProg} onEnd={() => setEnded(r.id)}
         onLove={() => love(r)} onSave={() => save(r)} onRemake={() => setRemake(r)} onBook={() => book(r)} onFamily={() => s.askGate('Family sharing', () => setFamily(r))}
         endCard={ended === r.id} closeEnd={() => setEnded(null)} next={() => { setEnded(null); scrollTo(i + 1); }} />)}
       <section className="slide done" data-i={total} data-testid="feed-done"><FeedDone n={total} night={night} /></section>
@@ -68,6 +70,7 @@ export function Feed() {
       <div className="toptabs2">{(bedtimeForced ? (['bedtime'] as FeedTab[]) : (['for', 'bedtime', 'birthday'] as FeedTab[])).map(t =>
         <button key={t} className={`ptab${tab === t ? ' on' : ''}`} onClick={() => setTab(t)} aria-pressed={tab === t}>{t === 'for' ? `For ${s.name}` : t === 'bedtime' ? '🌙 Bedtime' : 'Birthday'}</button>)}</div>
       {idx < total && <><div className="eps2" aria-hidden>{list.map((_, i) => <i key={i} className={i < idx ? 'done' : ''}>{i === idx && <motion.b style={{ width: `${prog * 100}%` }} />}</i>)}</div>
+        <button className="sound" onClick={toggleSound} aria-label={muted ? 'Sound on' : 'Sound off'} aria-pressed={!muted}>{muted ? '🔇' : '🔊'}</button>
         <div className="today" data-testid="today">TODAY · {Math.min(idx + 1, total)} OF {total}{night && <span className="calm">calm reels only</span>}</div></>}
     </div>
     <AnimatePresence>{remake && <RemakeSheet key="rm" reel={remake} onClose={() => setRemake(null)} />}</AnimatePresence>
@@ -75,13 +78,14 @@ export function Feed() {
   </div>;
 }
 
-function Slide({ r, i, active, night, onProg, onEnd, onLove, onSave, onRemake, onBook, onFamily, endCard, closeEnd, next }: {
-  r: Reel; i: number; active: boolean; night: boolean; onProg: (p: number) => void; onEnd: () => void; onLove: () => void; onSave: () => void; onRemake: () => void; onBook: () => void; onFamily: () => void; endCard: boolean; closeEnd: () => void; next: () => void;
+function Slide({ r, i, active, night, muted, onProg, onEnd, onLove, onSave, onRemake, onBook, onFamily, endCard, closeEnd, next }: {
+  r: Reel; i: number; active: boolean; night: boolean; muted: boolean; onProg: (p: number) => void; onEnd: () => void; onLove: () => void; onSave: () => void; onRemake: () => void; onBook: () => void; onFamily: () => void; endCard: boolean; closeEnd: () => void; next: () => void;
 }) {
   const s = useStore();
   const t = s.tpl(r.template_id);
   const v = useRef<HTMLVideoElement>(null);
   const [pop, setPop] = useState(0);
+  const [needsTap, setNeedsTap] = useState(false);
   const rendering = r.status === 'queued' || r.status === 'rendering';
   const scene = sceneOf(r.state.scene);
   const poster = img(scene.image);
@@ -92,9 +96,10 @@ function Slide({ r, i, active, night, onProg, onEnd, onLove, onSave, onRemake, o
   const rp = job ? s.renderProg[job.id] ?? 0 : 0;
   useEffect(() => {
     const el = v.current; if (!el) return;
-    if (active && !endCard) { el.muted = true; el.play().catch(() => {}); } else el.pause();
+    el.muted = muted;
+    if (active && !endCard) { el.play().then(() => setNeedsTap(false)).catch(() => { el.muted = true; el.play().then(() => setNeedsTap(false)).catch(() => setNeedsTap(true)); }); } else el.pause();
     if (!active) { try { el.currentTime = 0; } catch { /* not loaded */ } }
-  }, [active, endCard, src]);
+  }, [active, endCard, src, muted]);
   // Image-only reels (no video yet): progress on a timer so the set bar still fills.
   useEffect(() => {
     if (!active || src || rendering || endCard || r.status === 'failed') return;
@@ -104,12 +109,13 @@ function Slide({ r, i, active, night, onProg, onEnd, onLove, onSave, onRemake, o
   }, [active, src, rendering, endCard]);
   const line = fill(r.state.text, s.name, r.state);
   const words = line.split(/(\s+)/).map((w, k) => /\b(Nibbs|moon|stars?|whale|dino|wish|cloud|Bruno|Arjun)\b/i.test(w) || w.includes(s.name) ? <b key={k}>{w}</b> : w);
-  return <section className="slide" data-i={i} data-testid={`reel-${i}`} data-reel={r.id} data-status={r.status} data-version={r.version} aria-label={s.title(r)}>
+  return <section className="slide" data-i={i} data-testid={`reel-${i}`} data-reel={r.id} data-status={r.status} data-version={r.version} data-line={line} aria-label={s.title(r)}>
     {src && !rendering
       ? <video ref={v} className="media" src={src} poster={poster} muted playsInline preload={active ? 'auto' : 'metadata'} data-testid="reel-video"
           onTimeUpdate={e => { const el = e.currentTarget; if (active && el.duration) onProg(el.currentTime / el.duration); }} onEnded={() => active && onEnd()} />
       : <div className={`media kb${active ? ' on' : ''}`} style={{ backgroundImage: `url(${poster})` }} role="img" aria-label={scene.label} />}
     <div className="shade2" />
+    {needsTap && active && src && !rendering && <button className="tapplay" aria-label="Play reel" onClick={() => v.current?.play().then(() => setNeedsTap(false)).catch(() => {})}>▶</button>}
     {rendering && <div className="rendering" data-testid="rendering"><div className="spin" /><b>{r.status === 'queued' ? 'Queued…' : 'Rendering…'}</b><span>Version {r.version} · {scene.label}</span>
       <div className="rbar"><i style={{ width: `${Math.round(rp * 100)}%` }} /></div><small>Nibbs is filming it on this phone. Keep the app open (about 10 s).</small></div>}
     {r.status === 'failed' && <div className="rendering" data-testid="render-failed"><b>Couldn't film this one</b><small>This browser can't record video. Try Safari or Chrome.</small></div>}

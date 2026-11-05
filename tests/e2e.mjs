@@ -47,7 +47,7 @@ await step('remake: edit scene/outfit/co-star/text -> new version + job, re-rend
   await p.waitForFunction(() => document.querySelector('[data-testid=reel-0]')?.getAttribute('data-version') === '2');
   await first.getByTestId('rendering').waitFor({ timeout: 5000 }); await shot('08-rendering-v2');
   await p.waitForFunction(() => document.querySelector('[data-testid=reel-0]')?.getAttribute('data-status') === 'ready', null, { timeout: 40000 });
-  await first.locator('video').waitFor(); assert.match(await first.innerText(), /Bubbles for Bruno/);
+  await first.locator('video').waitFor(); assert.match(await first.getAttribute('data-line'), /Bubbles for Bruno/); assert.equal(await first.getAttribute('data-version'), '2');
 });
 await step('end card -> book reader', async () => {
   await p.evaluate(() => document.querySelector('[data-testid=reel-0] video')?.dispatchEvent(new Event('ended')));

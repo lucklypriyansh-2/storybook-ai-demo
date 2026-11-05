@@ -52,6 +52,10 @@ export function StoreProvider({ children, api: given }: { children: ReactNode; a
       .catch(e => setError(String(e?.message ?? e)));
     return () => off();
   }, [api, refresh]);
+  useEffect(() => { // revoke object URLs for video versions no reel points at any more
+    const live = new Set(reels.map(r => r.video_url));
+    for (const [k, u] of urls.current) if (!live.has(k)) { URL.revokeObjectURL(u); urls.current.delete(k); }
+  }, [reels]);
   useEffect(() => { history.replaceState(null, '', '#' + route + (arg ? '/' + arg : '')); }, [route, arg]);
   useEffect(() => { const f = () => { const p = parse(); if (p.r) { setRoute(p.r); setArg(p.a); } }; addEventListener('hashchange', f); return () => removeEventListener('hashchange', f); }, []);
 

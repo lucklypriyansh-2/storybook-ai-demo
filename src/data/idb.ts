@@ -12,7 +12,7 @@ async function tx<T>(mode: IDBTransactionMode, f: (s: IDBObjectStore) => IDBRequ
   return new Promise((res, rej) => { const t = db.transaction(STORE, mode); const q = f(t.objectStore(STORE)); q.onsuccess = () => res(q.result as T); q.onerror = () => rej(q.error); });
 }
 export const kv = {
-  async get<T>(k: string): Promise<T | undefined> { if (!hasIdb()) return mem.get(k) as T; try { return await tx<T>('readonly', s => s.get(k)); } catch { return mem.get(k) as T; } },
+  async get<T>(k: string): Promise<T | undefined> { if (!hasIdb()) return mem.get(k) as T; try { const v = await tx<T>('readonly', s => s.get(k)); return v === undefined ? (mem.get(k) as T) : v; } catch { return mem.get(k) as T; } },
   async set(k: string, v: unknown) { if (!hasIdb()) { mem.set(k, v); return; } try { await tx('readwrite', s => s.put(v, k)); } catch { mem.set(k, v); } },
   async del(k: string) { mem.delete(k); if (hasIdb()) try { await tx('readwrite', s => s.delete(k)); } catch { /* ignore */ } },
   async keys(): Promise<string[]> { if (!hasIdb()) return [...mem.keys()]; try { return (await tx<IDBValidKey[]>('readonly', s => s.getAllKeys())).map(String); } catch { return [...mem.keys()]; } },

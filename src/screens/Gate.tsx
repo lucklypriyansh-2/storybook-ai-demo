@@ -23,7 +23,7 @@ export function ParentGate() {
     <div className="gatewords" data-testid="gate-words" data-code={code.join('')}>{code.map((n, i) => <span key={i} className={i < step ? 'ok' : ''}>{WORDS[n]}</span>).reduce((a: React.ReactNode[], x, i) => (i ? [...a, ' · ', x] : [x]), [])}</div>
     <motion.div className="keypad" animate={shake ? { x: [0, -12, 12, -8, 8, 0] } : {}} key={shake} transition={{ duration: 0.4 }}>
       {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => <button key={n} className={`card key${holding === n ? ' sel' : ''}`} aria-label={`Number ${n}`}
-        onPointerDown={e => { e.preventDefault(); down(n); }} onPointerUp={up} onPointerLeave={up} onPointerCancel={up} onContextMenu={e => e.preventDefault()}>
+        onPointerDown={e => { e.preventDefault(); try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* jsdom */ } down(n); }} onPointerUp={up} onPointerCancel={up} onContextMenu={e => e.preventDefault()}>
         {n}{holding === n && <motion.i className="hold" initial={{ scaleX: 0 }} animate={{ scaleX: 1 }} transition={{ duration: HOLD_MS / 1000, ease: 'linear' }} />}</button>)}
     </motion.div>
     <p className="cap" style={{ textAlign: 'center', marginTop: 14 }}>Words, not digits, so early readers can't guess it.</p>

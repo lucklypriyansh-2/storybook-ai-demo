@@ -2,14 +2,15 @@ import { avatarSvg, type Look } from '../mascot';
 import { NIBBS_SVG } from '../nibbs-svg';
 import { fill, sceneOf } from '../data/seed';
 import { OUTFIT_COLOR, type ReelState, type Template } from '../data/types';
+import { audioCtx } from './audio';
 
 /** $0 in-browser renderer: canvas (scene art Ken Burns + trait avatar + co-star + burned-in captions) + WebAudio music,
  *  recorded with MediaRecorder. MP4/H.264 where supported (iPhone Safari), WebM otherwise. Nothing leaves the device. */
 export const W = 540, H = 960, FPS = 30;
-export function pickMime(): string {
+export function pickMime(exclude: string[] = []): string {
   if (typeof MediaRecorder === 'undefined') return '';
   const c = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
-  return c.find(m => { try { return MediaRecorder.isTypeSupported(m); } catch { return false; } }) ?? '';
+  return c.filter(m => !exclude.some(x => m.startsWith(x))).find(m => { try { return MediaRecorder.isTypeSupported(m); } catch { return false; } }) ?? '';
 }
 export const canRender = () => typeof document !== 'undefined' && !!pickMime() && typeof HTMLCanvasElement !== 'undefined' && 'captureStream' in HTMLCanvasElement.prototype;
 const loadImg = (src: string) => new Promise<HTMLImageElement>((res, rej) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => rej(new Error('image ' + src)); i.src = src; });
@@ -23,9 +24,9 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, max: number) {
 }
 function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
 
-export interface RenderInput { template: Template; state: ReelState; name: string; look: Look; base: string; seconds?: number; onProgress?: (p: number) => void }
-export async function renderReel({ template, state, name, look, base, seconds = 8, onProgress }: RenderInput): Promise<{ blob: Blob; mime: string }> {
-  const mime = pickMime(); if (!mime) throw new Error('This browser cannot record video (MediaRecorder missing)');
+export interface RenderInput { template: Template; state: ReelState; name: string; look: Look; base: string; seconds?: number; onProgress?: (p: number) => void; avoid?: string[] }
+export async function renderReel({ template, state, name, look, base, seconds = 8, onProgress, avoid = [] }: RenderInput): Promise<{ blob: Blob; mime: string }> {
+  const mime = pickMime(avoid); if (!mime) throw new Error('This browser cannot record video (MediaRecorder missing)');
   const scene = sceneOf(state.scene);
   const outfit = OUTFIT_COLOR[state.outfit] ?? look.outfit;
   const [bg, av, co] = await Promise.all([
@@ -73,11 +74,13 @@ export async function renderReel({ template, state, name, look, base, seconds = 
   };
 
   const stream = (cv as HTMLCanvasElement & { captureStream(fps?: number): MediaStream }).captureStream(FPS);
-  let ac: AudioContext | null = null;
+  const ac = audioCtx();
+  let dest: MediaStreamAudioDestinationNode | null = null;
   try { // CC0-by-construction music: a generated pentatonic lullaby, mixed into the recording
-    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    ac = new AC(); await ac.resume().catch(() => {});
-    const dest = ac.createMediaStreamDestination(); const master = ac.createGain(); master.gain.value = 0.16; master.connect(dest);
+    if (!ac) throw new Error('no audio');
+    await ac.resume().catch(() => {});
+    if (ac.state !== 'running') throw new Error('audio locked');
+    dest = ac.createMediaStreamDestination(); const master = ac.createGain(); master.gain.value = 0.16; master.connect(dest);
     const notes = template.mode === 'bedtime' ? [392, 330, 294, 330, 262, 294, 330, 262] : [523, 587, 659, 784, 659, 587, 523, 659];
     const step = template.mode === 'bedtime' ? 0.75 : 0.5;
     for (let k = 0; k * step < seconds; k++) {
@@ -88,16 +91,23 @@ export async function renderReel({ template, state, name, look, base, seconds = 
     dest.stream.getAudioTracks().forEach(tr => stream.addTrack(tr));
   } catch { /* video without music */ }
 
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2_500_000 });
-  const chunks: Blob[] = []; rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-  const done = new Promise<void>(r => { rec.onstop = () => r(); });
-  draw(0); rec.start(250);
-  const t0 = performance.now();
-  await new Promise<void>(res => {
-    const tick = () => { const t = (performance.now() - t0) / 1000; draw(Math.min(t, seconds)); onProgress?.(Math.min(1, t / seconds)); if (t >= seconds) res(); else setTimeout(tick, 1000 / FPS); };
-    tick();
-  });
-  rec.stop(); await done; stream.getTracks().forEach(t => t.stop()); ac?.close().catch(() => {});
+  const chunks: Blob[] = [];
+  try {
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2_500_000 });
+    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    const done = new Promise<void>((r, j) => { rec.onstop = () => r(); rec.onerror = () => j(new Error('recorder error')); });
+    draw(0); rec.start(250);
+    const t0 = performance.now();
+    await new Promise<void>((res, rej) => {
+      const tick = () => {
+        if (document.visibilityState === 'hidden') { rej(new Error('app went to background while filming')); return; }
+        const t = (performance.now() - t0) / 1000; draw(Math.min(t, seconds)); onProgress?.(Math.min(1, t / seconds));
+        if (t >= seconds) res(); else if (typeof requestAnimationFrame === 'function') requestAnimationFrame(tick); else setTimeout(tick, 1000 / FPS);
+      };
+      tick();
+    }).finally(() => { if (rec.state !== 'inactive') rec.stop(); });
+    await done;
+  } finally { stream.getTracks().forEach(t => t.stop()); dest?.disconnect(); }
   const type = mime.split(';')[0];
   return { blob: new Blob(chunks, { type }), mime: type };
 }
