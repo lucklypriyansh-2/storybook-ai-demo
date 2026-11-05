@@ -1,0 +1,8 @@
+# Copy to .dev.vars for local dev. Never commit .dev.vars.
+# Local dev runs with mocked providers against file:./.data/worker.db.
+WORKER_SESSION_SECRET="local-dev-only-not-a-real-secret"
+MOCK_PROVIDERS="1"
+# LIBSQL_URL="libsql://…"              # unset = file:./.data/worker.db
+# LIBSQL_AUTH_TOKEN=""
+# OPENROUTER_API_KEY=""
+# FAL_KEY=""

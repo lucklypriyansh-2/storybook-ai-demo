@@ -28,7 +28,8 @@ export function Grownups() {
   return <div className="body cream scroll tabbed" data-testid="grownups">
     <h1>Grown-ups</h1><div className="cap" style={{ marginTop: 4 }}>Unlocked with the parent gate · locks again in 5 min</div>
     <div className="card backend" data-testid="backend">
-      {s.api.mode === 'supabase' ? <><b>☁️ Synced with Supabase</b><div className="cap">Household-only (row-level security).</div></>
+      {s.api.mode === 'worker' ? <><b>☁️ Cloud mode (Storybook Worker)</b><div className="cap">Photos and reels run on our server. The cloud backend activates when VITE_API_URL is set at build time.</div></>
+        : s.api.mode === 'supabase' ? <><b>☁️ Synced with Supabase</b><div className="cap">Household-only (row-level security).</div></>
         : <><b>📱 Saved on this phone</b><div className="cap">v1 keeps everything in this browser (IndexedDB). Cloud sync comes later.</div></>}</div>
 
     <div className="cap sect">SETTINGS</div>

@@ -1,0 +1,28 @@
+{
+  "name": "storybook-ai-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:node": "tsx watch src/node-server.ts",
+    "start": "node server.cjs",
+    "migrate": "node scripts/migrate-libsql.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "bash deploy-vercel.sh",
+    "bundle": "esbuild src/node-server.ts --bundle --platform=node --format=esm --outfile=dist/server.mjs --packages=external"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.25.12",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

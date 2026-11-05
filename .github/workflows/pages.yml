@@ -12,7 +12,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-        env: { BASE_PATH: "/${{ github.event.repository.name }}/" }
+        env:
+          BASE_PATH: "/${{ github.event.repository.name }}/"
+          VITE_API_URL: "https://white-eagle-244989.hostingersite.com"
       - uses: actions/configure-pages@v5
         with: { enablement: true }
       - uses: actions/upload-pages-artifact@v3
