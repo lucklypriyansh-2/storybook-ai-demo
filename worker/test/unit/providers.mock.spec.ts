@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { assertSafeVideoInput, makeFalVideo } from "../../src/providers/fal";
 import { makeProviders } from "../../src/providers";
-import { buildOpenRouterBody, makeOpenRouterImage, PROVIDER_POLICY } from "../../src/providers/openrouter";
+import { buildOpenRouterBody, makeOpenRouterImage, imageFromResponse, PROVIDER_POLICY } from "../../src/providers/openrouter";
 import { makeMockImage } from "../../src/providers/mock";
 import type { Env } from "../../src/env";
 import { asD1, FakeD1 } from "./fake-d1";
@@ -55,6 +55,80 @@ describe("openrouter adapter", () => {
     expect(out.value.bytes.length).toBeGreaterThan(0);
     expect(out.requestId).toBe("req_1");
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("extracts a data URL from a content part array", async () => {
+    const pngB64 = "iVBORw0KGgo=";
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const sent = JSON.parse(String(init?.body));
+      expect(sent.modalities).toEqual(["image", "text"]);
+      return new Response(
+        JSON.stringify({
+          id: "req_parts",
+          choices: [
+            {
+              message: {
+                content: [
+                  { type: "text", text: "here you go" },
+                  { type: "image_url", image_url: { url: `data:image/png;base64,${pngB64}` } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const adapter = makeOpenRouterImage("test-key", fetchImpl);
+    const out = await adapter.generate({ prompt: "a friendly fox" });
+    expect(out.value.bytes).toEqual(Uint8Array.from(atob(pngB64), (c) => c.charCodeAt(0)));
+    expect(out.requestId).toBe("req_parts");
+  });
+
+  it("extracts a data URL embedded in a content string", async () => {
+    const pngB64 = "iVBORw0KGgo=";
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: "req_string",
+          choices: [
+            {
+              message: {
+                content: `Sure! ![img](data:image/png;base64,${pngB64}) hope that helps`,
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const adapter = makeOpenRouterImage("test-key", fetchImpl);
+    const out = await adapter.generate({ prompt: "a friendly fox" });
+    expect(out.value.bytes).toEqual(Uint8Array.from(atob(pngB64), (c) => c.charCodeAt(0)));
+    expect(out.requestId).toBe("req_string");
+  });
+
+  it("throws openrouter_no_image when no image is present anywhere", () => {
+    expect(() =>
+      imageFromResponse({ choices: [{ message: { content: "no picture here" } }] }),
+    ).toThrow("openrouter_no_image");
+  });
+
+  it("throws openrouter_unsupported_url for a non-data:image URL instead of mis-decoding it", () => {
+    expect(() =>
+      imageFromResponse({
+        choices: [{ message: { images: [{ image_url: { url: "https://cdn.example.dev/sheet.png" } }] } }],
+      }),
+    ).toThrow("openrouter_unsupported_url");
+    expect(() =>
+      imageFromResponse({
+        choices: [
+          { message: { content: [{ type: "image_url", image_url: { url: "https://cdn.example.dev/x.png" } }] } },
+        ],
+      }),
+    ).toThrow("openrouter_unsupported_url");
   });
 });
 

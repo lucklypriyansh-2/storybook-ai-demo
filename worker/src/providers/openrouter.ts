@@ -32,9 +32,21 @@ export function buildOpenRouterBody(
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
+type ResponsePart = {
+  type?: string;
+  text?: string;
+  url?: string;
+  image_url?: { url?: string } | string;
+};
+
+type ChatMessage = {
+  content?: string | ResponsePart[];
+  images?: { image_url?: { url?: string } }[];
+};
+
 type ChatResponse = {
   id?: string;
-  choices?: { message?: { content?: string; images?: { image_url?: { url: string } }[] } }[];
+  choices?: { message?: ChatMessage }[];
 };
 
 async function call(
@@ -66,13 +78,55 @@ async function call(
   return (await res.json()) as ChatResponse;
 }
 
-function imageFromResponse(resp: ChatResponse): Uint8Array {
-  const url = resp.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-  if (!url) throw new Error("openrouter_no_image");
+const DATA_URL_RE = /data:image\/[^;,\s]+;base64,[A-Za-z0-9+/=]+/;
+
+function decodeImageUrl(url: string): Uint8Array {
+  // Only inline `data:image/…;base64,` payloads are safe to decode here. A bare
+  // https/CDN URL would have no comma-delimited base64 body, so `atob` would
+  // either throw or silently decode garbage. Reject it explicitly so the job
+  // fails loudly instead of storing a corrupt sheet.
+  if (!url.startsWith("data:image/")) throw new Error("openrouter_unsupported_url");
   const comma = url.indexOf(",");
-  const b64 = comma >= 0 ? url.slice(comma + 1) : url;
+  const b64 = (comma >= 0 ? url.slice(comma + 1) : url).replace(/\s+/g, "");
   const bin = atob(b64);
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+// OpenRouter/Gemini is inconsistent about where the image lands: a dedicated
+// images[] entry, a content part, or a data URL embedded in a plain string.
+function imageUrlFromContent(content: ChatMessage["content"]): string | undefined {
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!part || (part.type !== "image_url" && part.type !== "image")) continue;
+      const url =
+        typeof part.image_url === "string" ? part.image_url : part.image_url?.url ?? part.url;
+      if (url) return url;
+    }
+    return undefined;
+  }
+  if (typeof content === "string") {
+    const match = content.match(DATA_URL_RE);
+    if (match) return match[0];
+  }
+  return undefined;
+}
+
+export function imageFromResponse(resp: ChatResponse): Uint8Array {
+  const message = resp.choices?.[0]?.message;
+  const url = message?.images?.[0]?.image_url?.url ?? imageUrlFromContent(message?.content);
+  if (!url) throw new Error("openrouter_no_image");
+  return decodeImageUrl(url);
+}
+
+function textFromResponse(resp: ChatResponse): string {
+  const content = resp.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (part?.type === "text" || part?.text ? part.text ?? "" : ""))
+      .join("");
+  }
+  return "";
 }
 
 export function makeOpenRouterImage(apiKey: string, fetchImpl: FetchLike = fetch): ImageGen {
@@ -116,7 +170,7 @@ export function makeOpenRouterText(apiKey: string, fetchImpl: FetchLike = fetch)
         fetchImpl,
       );
       return {
-        value: { text: resp.choices?.[0]?.message?.content ?? "" },
+        value: { text: textFromResponse(resp) },
         actualUsd: COSTS.shot_list.usd,
         requestId: resp.id,
       };

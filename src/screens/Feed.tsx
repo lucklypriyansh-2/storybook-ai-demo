@@ -87,6 +87,7 @@ function Slide({ r, i, active, night, muted, onProg, onEnd, onLove, onSave, onRe
   const [pop, setPop] = useState(0);
   const [needsTap, setNeedsTap] = useState(false);
   const rendering = r.status === 'queued' || r.status === 'rendering';
+  const worker = s.api.mode === 'worker';
   const scene = sceneOf(r.state.scene);
   const poster = img(scene.image);
   const bk = s.books.find(b => b.reel_id === r.id);
@@ -117,8 +118,9 @@ function Slide({ r, i, active, night, muted, onProg, onEnd, onLove, onSave, onRe
     <div className="shade2" />
     {needsTap && active && src && !rendering && <button className="tapplay" aria-label="Play reel" onClick={() => v.current?.play().then(() => setNeedsTap(false)).catch(() => {})}>▶</button>}
     {rendering && <div className="rendering" data-testid="rendering"><div className="spin" /><b>{r.status === 'queued' ? 'Queued…' : 'Rendering…'}</b><span>Version {r.version} · {scene.label}</span>
-      <div className="rbar"><i style={{ width: `${Math.round(rp * 100)}%` }} /></div><small>Nibbs is filming it on this phone. Keep the app open (about 10 s).</small></div>}
-    {r.status === 'failed' && <div className="rendering" data-testid="render-failed"><b>Couldn't film this one</b><small>This browser can't record video. Try Safari or Chrome.</small></div>}
+      <div className="rbar"><i style={{ width: `${Math.round(rp * 100)}%` }} /></div><small>{worker ? 'Nibbs is drawing the scenes in the cloud. This usually takes under a minute.' : 'Nibbs is filming it on this phone. Keep the app open (about 10 s).'}</small></div>}
+    {r.status === 'failed' && <div className="rendering" data-testid="render-failed"><b>{worker ? "Couldn't finish this one" : "Couldn't film this one"}</b><small>{worker ? 'The cloud render failed. Try remaking it.' : "This browser can't record video. Try Safari or Chrome."}</small></div>}
+    {worker && !src && !rendering && r.status === 'ready' && <span className="chip" data-testid="still-frames-chip" style={{ position: 'absolute', left: 12, bottom: 96, zIndex: 3 }}>🎨 Storybook mode · still frames</span>}
     <div className="rail2">
       <button className={`rb2${r.loved ? ' love' : ''}`} onClick={() => { if (!r.loved) setPop(p => p + 1); onLove(); }} aria-pressed={r.loved} aria-label="Love it">
         <motion.span className="c" key={pop} animate={pop ? { scale: [1, 1.3, 1] } : {}} transition={{ duration: 0.45, ease: [0.34, 1.56, 0.64, 1] }}>{ICON.heart}</motion.span>Love it
