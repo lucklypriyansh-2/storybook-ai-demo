@@ -1,0 +1,20 @@
+[
+  {"id":"moon","sort":1,"mode":"day","title":"{name} Visits the Moon","duration_s":8,"cover":"cover.jpg","video":"media/moon.mp4","book_title":"{name}'s Moon Trip","cliffhanger":"What did {name} find on the moon?",
+   "default_state":{"scene":"moon","outfit":"raincoat","co_star":"nibbs","text":"Hold on tight, {costar}! The moon is smiling at us!"},
+   "script":["One night, {name} and {costar} looked up. The moon was waving!","\"Let's go!\" said {name}, and {costar} flapped hard.","Up past the clouds they flew, faster than a shooting star.","The moon had craters like giant cups of cocoa.","\"Hold on tight, {costar}! The moon is smiling at us!\"","Behind a moon rock, something tiny was glowing…"]},
+  {"id":"ocean","sort":2,"mode":"day","title":"{name} Under the Sea","duration_s":8,"cover":"reel-ocean.jpg","video":"media/ocean.mp4","book_title":"{name} and the Singing Whale","cliffhanger":"Who was singing in the deep blue sea?",
+   "default_state":{"scene":"ocean","outfit":"raincoat","co_star":"nibbs","text":"Bubbles, bubbles everywhere! Hello, little fish!"},
+   "script":["{name} took a deep breath and dived into the sparkly sea.","{costar} blew bubbles shaped like stars.","A friendly whale swam by, humming a slow song.","\"Bubbles, bubbles everywhere! Hello, little fish!\"","Far below, a shell was humming back…"]},
+  {"id":"jungle","sort":3,"mode":"day","title":"{name} in Dino Jungle","duration_s":8,"cover":"reel-jungle.jpg","video":"media/jungle.mp4","book_title":"{name}'s Dino Day","cliffhanger":"Whose giant footprints were those?",
+   "default_state":{"scene":"jungle","outfit":"raincoat","co_star":"nibbs","text":"Stomp, stomp! A baby dino wants to play!"},
+   "script":["Deep in the jungle, {name} heard a tiny stomp.","{costar} peeked behind a big green leaf.","A baby dino giggled and splashed in the waterfall.","\"Stomp, stomp! A baby dino wants to play!\"","Then the ground went BOOM… and BOOM again."]},
+  {"id":"birthday","sort":4,"mode":"birthday","title":"{name}'s Birthday Party","duration_s":8,"cover":"reel-birthday.jpg","video":"media/birthday.mp4","book_title":"{name}'s Best Birthday","cliffhanger":"What was inside the biggest present?",
+   "default_state":{"scene":"birthday","outfit":"party","co_star":"nibbs","text":"Make a wish, {name}! Then blow really hard!"},
+   "script":["Balloons floated up as {name} came downstairs.","{costar} had baked a cake (a little wobbly).","Everyone sang, and the candles twinkled.","\"Make a wish, {name}! Then blow really hard!\"","In the corner sat one giant present, wiggling…"]},
+  {"id":"bedtime-stars","sort":5,"mode":"bedtime","title":"Goodnight, Stars","duration_s":8,"cover":"spread-03-bedtime.jpg","video":"media/bedtime-stars.mp4","book_title":"{name}'s Goodnight Stars","cliffhanger":"Which star will {name} wish on tonight?",
+   "default_state":{"scene":"bedtime","outfit":"raincoat","co_star":"nibbs","text":"One star, two stars… sleepy stars, goodnight."},
+   "script":["When the sky turned purple, {name} and {costar} counted stars.","Every star gave a tiny, sleepy twinkle.","\"One star, two stars… sleepy stars, goodnight.\"","{costar} tucked in tiny wings and yawned.","Goodnight, {name}. Sweet dreams."]},
+  {"id":"cloud-whale","sort":6,"mode":"bedtime","title":"Cloud Whale Lullaby","duration_s":8,"cover":"spread-02-whale.jpg","video":"media/cloud-whale.mp4","book_title":"{name} and the Cloud Whale","cliffhanger":"Where will the cloud whale float next?",
+   "default_state":{"scene":"bedtime","outfit":"raincoat","co_star":"nibbs","text":"Breathe in slow… breathe out slow… float like a cloud."},
+   "script":["A whale made of clouds drifted past {name}'s window.","\"Hop on,\" it whispered. {costar} climbed on too.","\"Breathe in slow… breathe out slow… float like a cloud.\"","They floated over sleepy hills and quiet seas.","Back in bed, {name} smiled. Goodnight."]}
+]
