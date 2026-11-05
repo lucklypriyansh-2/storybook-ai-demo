@@ -3,7 +3,7 @@ import type { Env } from "./env";
 export const DEFAULT_ALLOWED_ORIGIN = "https://lucklypriyansh-2.github.io";
 
 const ALLOW_METHODS = "GET, POST, OPTIONS";
-const ALLOW_HEADERS = "content-type";
+const ALLOW_HEADERS = "content-type, authorization";
 
 function allowedOrigin(env: Env): string {
   return env.ALLOWED_ORIGIN ?? DEFAULT_ALLOWED_ORIGIN;

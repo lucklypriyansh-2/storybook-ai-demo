@@ -1111,7 +1111,7 @@ function getEnv() {
 // src/cors.ts
 var DEFAULT_ALLOWED_ORIGIN = "https://lucklypriyansh-2.github.io";
 var ALLOW_METHODS = "GET, POST, OPTIONS";
-var ALLOW_HEADERS = "content-type";
+var ALLOW_HEADERS = "content-type, authorization";
 function allowedOrigin(env2) {
   return env2.ALLOWED_ORIGIN ?? DEFAULT_ALLOWED_ORIGIN;
 }
