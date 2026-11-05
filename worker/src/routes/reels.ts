@@ -48,8 +48,6 @@ export async function create({ env, req }: Ctx): Promise<Response> {
     await assertHeadroom(env.DB, "fal", SHOT_COUNT * SHOT_SECONDS * COSTS.motion_i2v.usdPerSecond);
   }
 
-  await consumeReel(env.DB, session.user_id);
-
   const reelId = uuid();
   const jobId = uuid();
   const now = Date.now();
@@ -62,6 +60,11 @@ export async function create({ env, req }: Ctx): Promise<Response> {
     ).bind(jobId, reelId, kidId, now, now),
   ]);
   await env.JOBS.send({ job_id: jobId });
+
+  // M-12: consume daily reel credit only after the rows and queue send succeed,
+  // so a failed enqueue does not burn the user's credit for the day.
+  await consumeReel(env.DB, session.user_id);
+
   await maybeRunInline(env, jobId);
 
   return Response.json({ reel_id: reelId, job_id: jobId });

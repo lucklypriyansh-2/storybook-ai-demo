@@ -1,13 +1,12 @@
 import type { Env } from "../env";
-import { readFlags } from "../config/flags";
 import { runJob } from "./consumer";
 
 /**
- * `wrangler dev --local` does not reliably drive queue consumers, so under
- * MOCK_PROVIDERS we also run the job in-process right after enqueueing. The
- * queue send is still performed; runJob is a no-op if the consumer wins first.
+ * Portable (Vercel/Node) build has no managed queue consumer, so every enqueue
+ * runs the job in-process. If the handler throws, runJob has already marked the
+ * job failed and the crash-recovery poller in node-server.ts (or a next request
+ * on Vercel) picks up any job still in `queued`/`running` past the stale cutoff.
  */
 export async function maybeRunInline(env: Env, jobId: string): Promise<void> {
-  if (!readFlags(env).mockProviders) return;
   await runJob(env, jobId);
 }

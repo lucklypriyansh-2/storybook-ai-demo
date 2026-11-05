@@ -4,16 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local --persist-to .mf",
+    "dev:node": "tsx watch src/node-server.ts",
+    "start": "tsx src/node-server.ts",
+    "migrate": "node scripts/migrate-libsql.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "deploy": "bash deploy.sh"
+    "deploy": "bash deploy.sh",
+    "deploy:vercel": "bash deploy-vercel.sh"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "latest",
-    "miniflare": "latest",
+    "@types/node": "^20.11.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "vitest": "^3.0.0",
-    "wrangler": "latest"
+    "vitest": "^3.0.0"
   }
 }

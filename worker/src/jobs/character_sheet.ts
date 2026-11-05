@@ -35,7 +35,7 @@ export async function characterSheetJob(env: Env, jobId: string): Promise<void> 
   // Mocked or openrouter-disabled: free path, no ledger entry at all.
   const paid = livePaid(env, "openrouter");
   const image = paid ? makeProviders(env).image : pickFreeImage(env);
-  const model = paid ? MODELS.openrouterImage : MODELS.workersAiImage;
+  const model = paid ? MODELS.openrouterImage : MODELS.freeImage;
   const estUsd = paid ? COSTS.character_sheet.usd : 0;
   const ledgerId = paid
     ? await guardSpend({

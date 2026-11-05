@@ -48,7 +48,7 @@ describe("character sheet under mocked providers", () => {
     const r2 = new FakeR2();
     await seed(db, r2);
 
-    await characterSheetJob(mockEnv(db, r2, { MOCK_PROVIDERS: "0", ENABLE_OPENROUTER: "0", ENABLE_WORKERS_AI: "0" }), "job_1");
+    await characterSheetJob(mockEnv(db, r2, { MOCK_PROVIDERS: "0", ENABLE_OPENROUTER: "0" }), "job_1");
 
     expect(await currentSpend(asD1(db), "openrouter")).toBe(0);
     expect(db.ledger.size).toBe(0);

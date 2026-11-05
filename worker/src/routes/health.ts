@@ -10,7 +10,6 @@ export async function get({ env }: Ctx): Promise<Response> {
     flags: {
       openrouter: flags.openrouter,
       fal: flags.fal,
-      workers_ai: flags.workersAi,
       kill: await isKilled(env),
     },
   });

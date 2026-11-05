@@ -7,14 +7,11 @@ import { makeFalVideo } from "./fal";
 import { makeMockImage, makeMockText, makeMockVideo } from "./mock";
 import { makeOpenRouterImage, makeOpenRouterText } from "./openrouter";
 import type { ImageGen, TextGen, VideoGen } from "./types";
-import { makeWorkersAiImage, makeWorkersAiText } from "./workers_ai";
 
 export type ProviderSet = { image: ImageGen; text: TextGen; video: VideoGen; mocked: boolean };
 
-/** Free image path: workers_ai when enabled, else the mock. Never a paid call. */
-export function pickFreeImage(env: Env): ImageGen {
-  const flags = readFlags(env);
-  if (!flags.mockProviders && flags.workersAi) return makeWorkersAiImage(env.AI, env.DB);
+/** Free path always resolves to the mock in the portable build (no Workers AI). */
+export function pickFreeImage(_env: Env): ImageGen {
   return makeMockImage();
 }
 
@@ -53,8 +50,6 @@ export function makeProviders(env: Env): ProviderSet {
     text = makeMockText();
   } else if (flags.openrouter && env.OPENROUTER_API_KEY) {
     text = makeOpenRouterText(env.OPENROUTER_API_KEY);
-  } else if (flags.workersAi) {
-    text = makeWorkersAiText(env.AI, env.DB);
   } else {
     text = makeMockText();
   }
@@ -84,23 +79,13 @@ export function pickProvider(
   }
 
   if (step === "keyframe") {
-    if (tier === "free") {
-      if (!flags.mockProviders && !flags.workersAi) throw new ProviderDisabled("workers_ai");
-      return flags.workersAi && !flags.mockProviders
-        ? makeWorkersAiImage(env.AI, env.DB)
-        : makeMockImage();
-    }
+    if (tier === "free") return makeMockImage();
     if (!flags.mockProviders && !flags.openrouter) throw new ProviderDisabled("openrouter");
     return set.image;
   }
 
   if (step === "shot_list") {
-    if (tier === "free") {
-      if (!flags.mockProviders && !flags.workersAi) throw new ProviderDisabled("workers_ai");
-      return flags.workersAi && !flags.mockProviders
-        ? makeWorkersAiText(env.AI, env.DB)
-        : makeMockText();
-    }
+    if (tier === "free") return makeMockText();
     if (!flags.mockProviders && !flags.openrouter) throw new ProviderDisabled("openrouter");
     return set.text;
   }

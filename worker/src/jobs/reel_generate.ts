@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { assertHeadroom, compensateSpend, guardSpend, reconcileSpend } from "../budget/ledger";
+import { compensateSpend, guardSpend, reconcileSpend } from "../budget/ledger";
 import { isKilled } from "../budget/kill_switch";
 import {
   COSTS,
@@ -62,7 +62,7 @@ export async function reelGenerateJob(env: Env, jobId: string): Promise<void> {
     actualUsd += built.actualUsd;
 
     // Keyframes: paid/hd use openrouter image with the kid's character sheet as a
-    // reference; free uses workers_ai/mock. The provider id pins the model and
+    // reference; free uses mock. The provider id pins the model and
     // decides whether the sheet reference is even applicable.
     const image = pickProvider(env, "keyframe", tier) as ImageGen;
     const paidImage = image.id === "openrouter-gemini-2.5-flash-image";
@@ -133,30 +133,50 @@ async function buildShotList(
 async function enqueueMotion(env: Env, reelId: string, shots: Shot[], parentJobId: string): Promise<void> {
   const falPaid = livePaid(env, "fal");
   const perShot = motionUsd(SHOT_SECONDS);
+  const eligible = shots.filter((s) => s.keyframe_key);
+
+  // H-10: pre-reserve fal budget for every shot in a single atomic guardSpend
+  // so two HD reels running at once cannot both satisfy a per-shot headroom
+  // check and later overspend the cap. On BudgetExceeded, skip every motion
+  // shot and record the parent-job error without inserting any motion jobs.
+  let runnable = eligible.length;
   let skipped = 0;
+  let reservation: string | null = null;
 
-  for (let i = 0; i < shots.length; i++) {
-    const keyframeKey = shots[i]!.keyframe_key;
-    if (!keyframeKey) continue;
-
-    if (falPaid) {
-      try {
-        await assertHeadroom(env.DB, "fal", perShot);
-      } catch (err) {
-        if (err instanceof BudgetExceeded) {
-          skipped = shots.length - i;
-          break;
-        }
+  if (falPaid && runnable > 0) {
+    try {
+      reservation = await guardSpend({
+        env,
+        provider: "fal",
+        estUsd: round6(runnable * perShot),
+        model: MODELS.falI2V,
+        step: "motion_i2v_reserve",
+      });
+    } catch (err) {
+      if (err instanceof BudgetExceeded) {
+        skipped = runnable;
+        runnable = 0;
+      } else {
         throw err;
       }
     }
+  }
 
+  // Release the aggregate reservation: individual motion jobs re-guard
+  // atomically per shot in motion_i2v.ts, which also reconciles to actuals.
+  // The reservation here exists only to enforce the all-or-none budget check
+  // and is compensated before the jobs are actually inserted.
+  if (reservation) await compensateSpend(env.DB, reservation);
+
+  for (let i = 0; i < runnable; i++) {
+    const shot = eligible[i]!;
+    const keyframeKey = shot.keyframe_key!;
     const jobId = uuid();
     const now = Date.now();
     await env.DB.prepare(
       "INSERT INTO jobs (id, reel_id, kid_id, type, status, progress, error, attempt, payload, created_at, updated_at) VALUES (?, ?, NULL, 'motion_i2v', 'queued', 0, NULL, 0, ?, ?, ?)",
     )
-      .bind(jobId, reelId, JSON.stringify({ shot: i + 1, keyframe_key: keyframeKey }), now, now)
+      .bind(jobId, reelId, JSON.stringify({ shot: shot.index, keyframe_key: keyframeKey }), now, now)
       .run();
     await env.JOBS.send({ job_id: jobId });
   }
@@ -166,6 +186,10 @@ async function enqueueMotion(env: Env, reelId: string, shots: Shot[], parentJobI
       .bind(`motion_skipped_budget:${skipped}`, Date.now(), parentJobId)
       .run();
   }
+}
+
+function round6(usd: number): number {
+  return Math.round(usd * 1e6) / 1e6;
 }
 
 async function jobReelId(env: Env, jobId: string): Promise<string | null> {

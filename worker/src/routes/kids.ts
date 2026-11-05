@@ -112,12 +112,11 @@ export async function characterSheet({ env, req, params }: Ctx): Promise<Respons
   if (!photo) throw new BadRequest("photo_not_found");
 
   if (await isKilled(env)) throw new KillSwitchOn();
-  // Free path (mocked or openrouter disabled) runs on workers_ai/mock at $0, so
-  // only a real paid call is headroom-checked.
+  // Free path (mock providers / openrouter disabled) stays at $0; only a real
+  // paid call is headroom-checked.
   if (livePaid(env, "openrouter")) {
     await assertHeadroom(env.DB, "openrouter", COSTS.character_sheet.usd);
   }
-  await consumeCharacter(env.DB, session.user_id);
 
   const jobId = uuid();
   const now = Date.now();
@@ -127,6 +126,11 @@ export async function characterSheet({ env, req, params }: Ctx): Promise<Respons
     .bind(jobId, kidId, photoId, consentId, now, now)
     .run();
   await env.JOBS.send({ job_id: jobId });
+
+  // M-12: consume daily character credit only after the job row + queue send
+  // succeed, so an enqueue failure never burns credit.
+  await consumeCharacter(env.DB, session.user_id);
+
   await maybeRunInline(env, jobId);
 
   return Response.json({ job_id: jobId });

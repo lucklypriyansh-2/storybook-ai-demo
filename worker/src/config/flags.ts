@@ -1,7 +1,6 @@
 import type { Env } from "../env";
 
 export type Flags = {
-  workersAi: boolean;
   openrouter: boolean;
   fal: boolean;
   killSwitchEnv: boolean;
@@ -15,7 +14,6 @@ export function isOn(value: string | undefined, fallback: boolean): boolean {
 
 export function readFlags(env: Env): Flags {
   return {
-    workersAi: isOn(env.ENABLE_WORKERS_AI, true),
     openrouter: isOn(env.ENABLE_OPENROUTER, false),
     fal: isOn(env.ENABLE_FAL, false),
     killSwitchEnv: isOn(env.KILL_SWITCH, false),

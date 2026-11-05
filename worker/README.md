@@ -1,81 +1,93 @@
 # storybook-ai-worker
 
-Cloudflare Worker backend for the storybook reels app. Implements the budget and
-security design in `../docs/ai-backend/BUDGET-SECURITY-DESIGN.md`.
+Portable Node backend for the storybook reels app. Implements the budget and
+security design in `../docs/ai-backend/BUDGET-SECURITY-DESIGN.md`. Runs free on
+**Vercel Hobby + Turso (libSQL)** — no Cloudflare, no paid plan required.
 
-Status: M0/M1 scaffold. Auth, health, consent, kids, photos, reel enqueue, job
-status, admin ledger/kill-switch, and the character-sheet job are implemented.
-`reel_generate` is a progress-only stub and `motion_i2v` throws until pass 2.
+Status: M0/M1. Auth, health, consent, kids, photos, reel enqueue+run, job
+status, admin ledger/kill-switch, character-sheet job, reel pipeline, and
+motion jobs all implemented. fal is disabled until keys are provided.
 
 ## Run tests
 
 ```sh
 cd worker
 npm install
-npm test        # unit tests only; no network, no wrangler
+npm test        # vitest unit suite, in-memory D1/R2 fakes, no network
 npm run typecheck
 ```
-
-Unit tests use an in-memory D1 fake (`test/unit/fake-d1.ts`) — no wrangler needed.
 
 ## Local dev
 
 ```sh
 cd worker
-cp .dev.vars.example .dev.vars
-npx wrangler d1 migrations apply storybook-ai --local
-npm run dev
+npm install
+WORKER_SESSION_SECRET=local-dev-only MOCK_PROVIDERS=1 npm run migrate
+WORKER_SESSION_SECRET=local-dev-only MOCK_PROVIDERS=1 npm run dev:node
 ```
 
-`npm run dev` uses wrangler's local D1/R2/queue simulation. Mocks are forced by
-`MOCK_PROVIDERS=1`; no real provider is called. `test/e2e/local.sh` runs a
-partial happy path (health + invite + me) against the local server.
+`npm run dev:node` starts the Node HTTP server on `:8787` and runs
+`sweepTmp`/`resetDaily`/stale-job recovery on a 60s timer. Jobs execute
+in-process via the inline runner.
 
-## Deploy
+The libSQL store defaults to `file:./.data/worker.db` (gitignored). Point
+`LIBSQL_URL`/`LIBSQL_AUTH_TOKEN` at a Turso database for shared storage.
+
+## Deploy — Vercel Hobby + Turso
+
+One-time setup outside this repo:
+
+1. Create a Turso database (`turso db create storybook-ai`) and grab its
+   libSQL URL + auth token.
+2. Create a Vercel project linked to this directory (`vercel link`). Hobby
+   plan is sufficient; `maxDuration: 60` is set in `vercel.json`.
+
+Then provision secrets + apply migrations + deploy:
 
 ```sh
 cd worker
-CLOUDFLARE_API_TOKEN=... WORKER_SESSION_SECRET=... bash deploy.sh
+LIBSQL_URL="libsql://…"             \
+LIBSQL_AUTH_TOKEN="…"               \
+WORKER_SESSION_SECRET="…"           \
+OPENROUTER_API_KEY="…"              \  # optional; omit to stay on mocks
+ALLOWED_ORIGIN="https://lucklypriyansh-2.github.io" \
+PUBLIC_API_BASE="https://<your-vercel-app>.vercel.app" \
+bash deploy-vercel.sh
 ```
 
-`deploy.sh` fills the `<D1_ID>`, `<R2_BUCKET>`, `<QUEUE_NAME>` placeholders,
-applies migrations, pushes secrets from the environment via stdin, and deploys.
-Never put secret values in `wrangler.toml`, source, or `.dev.vars` committed to git.
-
-Set `PUBLIC_API_BASE` to the deployed Worker origin so fal gets absolute signed
-media URLs, and keep `ALLOWED_ORIGIN` pointed at the Pages origin.
+`deploy-vercel.sh` pipes each present secret into `vercel env add … production`
+via stdin (never echoed), runs migrations against the configured libSQL URL,
+and runs `vercel deploy --prod`. Missing optional keys are skipped.
 
 ### Granting admin
 
-`users.is_admin` defaults to 0 and nothing in the API sets it, so `/api/admin/*`
-is locked until you promote a user directly. After the account has logged in once
-(so a `users` row exists), run:
+`users.is_admin` defaults to 0. After the account has logged in once (so a
+`users` row exists), promote by email hash:
 
 ```sh
-# sha256 of the lowercased email is the users.email_hash
 H=$(printf '%s' 'you@example.com' | shasum -a 256 | cut -d' ' -f1)
-npx wrangler d1 execute storybook-ai --remote \
-  --command "UPDATE users SET is_admin = 1 WHERE email_hash = '$H'"
+LIBSQL_URL="libsql://…" LIBSQL_AUTH_TOKEN="…" \
+  node -e "import('@libsql/client').then(({createClient}) => \
+    createClient({url: process.env.LIBSQL_URL, authToken: process.env.LIBSQL_AUTH_TOKEN}) \
+    .execute({sql: 'UPDATE users SET is_admin = 1 WHERE email_hash = ?', args: [process.argv[1]]}) \
+    .then(r => console.log('updated', r.rowsAffected)))" "$H"
 ```
 
 ## Environment
 
-| Name | Where | Purpose |
+| Name | Required? | Purpose |
 |---|---|---|
-| `DB` | binding | D1 database |
-| `R2` | binding | R2 bucket (`tmp/`, `sheets/`, `reels/`) |
-| `JOBS` | binding | Queue producer/consumer |
-| `AI` | binding | Workers AI (free path) |
-| `WORKER_SESSION_SECRET` | secret | HMAC key for session cookies (required) |
-| `OPENROUTER_API_KEY` | secret | Paid image/text; unused while `ENABLE_OPENROUTER=0` |
-| `FAL_KEY` | secret | Image→video; unused while `ENABLE_FAL=0` |
-| `ENABLE_WORKERS_AI` | var | default `1` |
-| `ENABLE_OPENROUTER` | var | default `0` |
-| `ENABLE_FAL` | var | default `0` |
-| `KILL_SWITCH` | var | env wins over the D1 switch |
-| `MOCK_PROVIDERS` | var/secret | `1` forces mock adapters |
-| `ALLOWED_ORIGIN` | var | CORS origin echoed to the SPA (default Pages origin) |
-| `PUBLIC_API_BASE` | var | Worker origin for absolute signed media URLs |
+| `WORKER_SESSION_SECRET` | yes | HMAC key for session cookies + signed media URLs |
+| `LIBSQL_URL` | prod | Turso libSQL URL (default `file:./.data/worker.db` locally) |
+| `LIBSQL_AUTH_TOKEN` | prod | Turso auth token (omit for `file:` URLs) |
+| `OPENROUTER_API_KEY` | optional | Paid image/text; unused while `ENABLE_OPENROUTER=0` or missing |
+| `FAL_KEY` | optional | Image→video; unused while `ENABLE_FAL=0` or missing |
+| `ENABLE_OPENROUTER` | optional | `1` to use real OpenRouter when key present (default `0`) |
+| `ENABLE_FAL` | optional | `1` to use real fal when key present (default `0`) |
+| `KILL_SWITCH` | optional | `1` to short-circuit every paid call with 402 |
+| `MOCK_PROVIDERS` | optional | `1` forces mock adapters for every provider |
+| `ALLOWED_ORIGIN` | optional | CORS origin (default `https://lucklypriyansh-2.github.io`) |
+| `PUBLIC_API_BASE` | optional | Public origin for absolute signed media URLs |
 
 `MOCK_PROVIDERS=1` or a missing provider key always selects mocks, even if the
 corresponding `ENABLE_*` flag is on.
@@ -86,3 +98,4 @@ corresponding `ENABLE_*` flag is on.
 - Pre-charge before the call, reconcile to `actual_usd` after, compensate on error.
 - Per user per UTC day: 5 character sheets, 10 reels.
 - Kill switch short-circuits paid calls with HTTP 402 and `{"error":"kill_switch"}`.
+- `MOCK_PROVIDERS=1` or `ENABLE_*=0` paths spend $0 (ledger stays at 0).

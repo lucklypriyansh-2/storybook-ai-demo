@@ -21,13 +21,13 @@ export type VideoOpts = {
 export type GenResult<T> = { value: T; actualUsd?: number; requestId?: string };
 
 export type ImageGen = {
-  id: "openrouter-gemini-2.5-flash-image" | "wai-flux-1-schnell" | "mock-image";
+  id: "openrouter-gemini-2.5-flash-image" | "mock-image";
   estUsd(opts: ImageOpts): number;
   generate(opts: ImageOpts): Promise<GenResult<{ bytes: Uint8Array; mime: string }>>;
 };
 
 export type TextGen = {
-  id: "openrouter-gemini-2.5-flash" | "wai-llama-3.1-8b" | "mock-text";
+  id: "openrouter-gemini-2.5-flash" | "mock-text";
   estUsd(opts: TextOpts): number;
   complete(opts: TextOpts): Promise<GenResult<{ text: string }>>;
 };
