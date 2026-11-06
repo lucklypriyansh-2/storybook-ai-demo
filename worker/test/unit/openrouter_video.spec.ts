@@ -264,7 +264,7 @@ describe("motion_i2v charging (§H: openrouter ledger, not fal)", () => {
 });
 
 describe("caps", () => {
-  it("keeps a $10 cap for openrouter (motion + images share it)", () => {
-    expect(PROVIDER_CAP_USD.openrouter).toBe(10.0);
+  it("uses a $100 cap for openrouter (motion + images + text share it)", () => {
+    expect(PROVIDER_CAP_USD.openrouter).toBe(100.0);
   });
 });

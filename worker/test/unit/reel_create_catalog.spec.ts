@@ -148,7 +148,7 @@ describe("POST /api/reels HD gate is OpenRouter, not fal (§H)", () => {
     // and far short of the HD motion reserve — but the paid check fires first,
     // so this proves the *openrouter* budget is what gates HD. fal stays at $0
     // and is never consulted: if the gate still read fal, no 402 would surface.
-    db.budget.set("openrouter", { total_usd: 9.99, updated_at: 1 });
+    db.budget.set("openrouter", { total_usd: 99.99, updated_at: 1 });
     expect(await currentSpend(asD1(db), "fal")).toBe(0);
 
     await expect(

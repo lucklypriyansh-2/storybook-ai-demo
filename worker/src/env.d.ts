@@ -20,6 +20,12 @@ export interface Env {
   ALLOWED_ORIGIN?: string;
   PUBLIC_API_BASE?: string;
   BUILD?: string;
+
+  /** Google OAuth. The route 503s when either the id or secret is unset. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /** Absolute HTTPS URL Google should redirect to; e.g. "$PUBLIC_API_BASE/api/auth/google/callback". */
+  GOOGLE_REDIRECT_URI?: string;
 }
 
 export type JobMessage = { job_id: string };

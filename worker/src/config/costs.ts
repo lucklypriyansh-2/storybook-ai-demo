@@ -5,7 +5,10 @@ export const COSTS = {
   shot_list_free: { provider: "mock", model: "mock-text", usd: 0 },
   character_sheet: { provider: "openrouter", model: "google/gemini-2.5-flash-image", usd: 0.039 },
   keyframe_paid: { provider: "openrouter", model: "google/gemini-2.5-flash-image", usd: 0.039 },
-  keyframe_free: { provider: "mock", model: "mock-image", usd: 0 },
+  // Free now gets real stills when OpenRouter is live; the price matches a paid
+  // still so the ledger/cap guards the same per-call amount. When OpenRouter is
+  // not live the free path stays on the mock and bills $0 — see pipeline jobs.
+  keyframe_free: { provider: "openrouter", model: "google/gemini-2.5-flash-image", usd: 0.039 },
   // Motion moved onto OpenRouter's Videos API. Default is
   // `google/gemini-omni-1.2-flash`, billed per second of generated video with
   // `generate_audio: false`. Estimate: the listed 360p SKU is ~$0.023–0.025/s,
@@ -25,10 +28,15 @@ export type Tier = "free" | "paid" | "hd";
 export const SHOT_COUNT = 6;
 export const SHOT_SECONDS = 3; // gemini-omni-1.2-flash short-clip duration (see §H)
 
+/**
+ * Pre-charge for the whole reel pipeline (shot list + N keyframes). Free, paid
+ * and hd all precharge the same base now when OpenRouter is live, because free
+ * now gets real stills too (motion stays paid-only). Callers only invoke this
+ * when `livePaid(env, "openrouter")` is true; the mock path still spends $0.
+ */
 export function prechargeUsd(tier: Tier): number {
-  if (tier === "free") return 0;
   const paid = COSTS.shot_list.usd + SHOT_COUNT * COSTS.keyframe_paid.usd;
-  if (tier === "paid") return round(paid);
+  if (tier === "free" || tier === "paid") return round(paid);
   return round(paid + SHOT_COUNT * SHOT_SECONDS * COSTS.motion_i2v.usdPerSecond);
 }
 

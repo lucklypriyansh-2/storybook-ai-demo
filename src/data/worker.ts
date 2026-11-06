@@ -149,13 +149,40 @@ export class WorkerApi implements DataApi {
     return body as T;
   }
 
-  // ---- auth (invite-code only, design §4) ----
+  // ---- auth ----
+  // Three ways in: invite code (legacy), email+password (new default), Google
+  // OAuth (new default when GOOGLE_* env is set — availability probed via
+  // /api/auth/providers). Every path lands on the same session cookie.
   async invite(code: string, email: string) {
     const out = await this.req<{ user_id: string; is_admin: boolean; session_token?: string }>('/api/auth/invite', {
       method: 'POST', body: JSON.stringify({ code, email }),
     });
     if (out.session_token) this.persistToken(out.session_token);
     return out;
+  }
+  async register(email: string, password: string) {
+    const out = await this.req<{ user_id: string; is_admin: boolean; session_token?: string }>(
+      '/api/auth/register',
+      { method: 'POST', body: JSON.stringify({ email, password }) },
+    );
+    if (out.session_token) this.persistToken(out.session_token);
+    return out;
+  }
+  async login(email: string, password: string) {
+    const out = await this.req<{ user_id: string; is_admin: boolean; session_token?: string }>(
+      '/api/auth/login',
+      { method: 'POST', body: JSON.stringify({ email, password }) },
+    );
+    if (out.session_token) this.persistToken(out.session_token);
+    return out;
+  }
+  /** Does this deployment have Google configured? SPA uses this to show/hide the button. */
+  async providers() {
+    return this.req<{ email: boolean; google: boolean; invite: boolean }>('/api/auth/providers');
+  }
+  /** Absolute URL to send the browser at for the OAuth dance. */
+  googleStartUrl(returnTo: string): string {
+    return `${this.base}/api/auth/google/start?return_to=${encodeURIComponent(returnTo)}`;
   }
   async me() { return this.req<{ user_id: string; is_admin: boolean }>('/api/auth/me'); }
   /** Provider flags from the Worker (used for honest HD/motion gating; never fakes availability). */

@@ -1,5 +1,5 @@
 export const PROVIDER_CAP_USD = {
-  openrouter: 10.0,
+  openrouter: 100.0,
   fal: 10.0,
 } as const;
 

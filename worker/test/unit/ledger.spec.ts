@@ -27,19 +27,19 @@ describe("budget ledger", () => {
     expect(db.ledger.get(id)?.est_usd).toBeCloseTo(0.039, 6);
   });
 
-  it("throws BudgetExceeded when the pre-charge would cross $10", async () => {
+  it("throws BudgetExceeded when the pre-charge would cross $100", async () => {
     const db = new FakeD1();
-    db.budget.set("openrouter", { total_usd: 9.99, updated_at: 0 });
+    db.budget.set("openrouter", { total_usd: 99.99, updated_at: 0 });
     await expect(
       guardSpend({ env: envFor(db), ...base, estUsd: 0.039 }),
     ).rejects.toBeInstanceOf(BudgetExceeded);
-    expect(await currentSpend(asD1(db), "openrouter")).toBeCloseTo(9.99, 6);
+    expect(await currentSpend(asD1(db), "openrouter")).toBeCloseTo(99.99, 6);
     expect(db.ledger.size).toBe(0);
   });
 
-  it("allows a charge that lands exactly on the $10 cap", async () => {
+  it("allows a charge that lands exactly on the $100 cap", async () => {
     const db = new FakeD1();
-    db.budget.set("openrouter", { total_usd: 9.96, updated_at: 0 });
+    db.budget.set("openrouter", { total_usd: 99.96, updated_at: 0 });
     await expect(
       guardSpend({ env: envFor(db), ...base, estUsd: 0.039 }),
     ).resolves.toBeTruthy();

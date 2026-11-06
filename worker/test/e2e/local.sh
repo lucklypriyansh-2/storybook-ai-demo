@@ -120,11 +120,11 @@ SHOT_COUNT="$(printf '%s' "$BODY" | python3 -c "import sys,json;print(len(json.l
 note "reel done with 6 shots"
 
 step "budget: openrouter at cap → paid reel expect 402"
-sqlexec "INSERT OR REPLACE INTO budget_state (provider, total_usd, updated_at) VALUES ('openrouter', 10, 0)"
+sqlexec "INSERT OR REPLACE INTO budget_state (provider, total_usd, updated_at) VALUES ('openrouter', 100, 0)"
 CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H 'content-type: application/json' \
   -d "{\"kid_id\":\"$KID_ID\",\"story\":\"Mira and the moon\",\"tier\":\"paid\"}" "$BASE/api/reels")"
 [[ "$CODE" == "402" ]] || { echo "expected 402 at budget cap, got $CODE"; exit 1; }
-note "paid reel correctly refused with 402 at the \$10 cap"
+note "paid reel correctly refused with 402 at the \$100 cap"
 
 step "forget child"
 curl -fsS -b "$JAR" -X POST "$BASE/api/kids/$KID_ID/forget" | grep -q '"ok":true'

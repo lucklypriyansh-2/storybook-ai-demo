@@ -41,6 +41,11 @@ function route(method: string, path: string, handler: Handler): Route {
 const routes: Route[] = [
   route("GET", "/api/health", health.get),
   route("POST", "/api/auth/invite", auth.invite),
+  route("POST", "/api/auth/register", auth.register),
+  route("POST", "/api/auth/login", auth.login),
+  route("GET", "/api/auth/providers", auth.providers),
+  route("GET", "/api/auth/google/start", auth.googleStart),
+  route("GET", "/api/auth/google/callback", auth.googleCallback),
   route("GET", "/api/auth/me", auth.me),
   route("POST", "/api/auth/logout", auth.logout),
 
