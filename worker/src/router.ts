@@ -2,6 +2,7 @@ import type { Env } from "./env";
 import { NotFound } from "./util/errors";
 import * as admin from "./routes/admin";
 import * as auth from "./routes/auth";
+import * as catalog from "./routes/catalog";
 import * as consent from "./routes/consent";
 import * as health from "./routes/health";
 import * as jobs from "./routes/jobs";
@@ -48,14 +49,27 @@ const routes: Route[] = [
   route("POST", "/api/kids", kids.create),
   route("POST", "/api/kids/:id/forget", kids.forget),
   route("POST", "/api/kids/:id/character_sheet", kids.characterSheet),
+  route("GET", "/api/kids/:id/character_sheet", kids.characterSheetRead),
   route("POST", "/api/photos", photos.upload),
   route("POST", "/api/reels", reels.create),
   route("GET", "/api/reels", reels.list),
   route("GET", "/api/reels/:id", reels.get),
+  route("PATCH", "/api/reels/:id/pages/:index", reels.patchPage),
+  route("DELETE", "/api/reels/:id/pages/:index", reels.deletePage),
   route("GET", "/api/jobs/:id", jobs.get),
 
+  // Public catalog (R.1) — no session; enabled templates only.
+  route("GET", "/api/catalog", catalog.list),
+  route("GET", "/api/catalog/:id", catalog.detail),
+
+  route("POST", "/api/admin/bootstrap", admin.bootstrap),
   route("GET", "/api/admin/ledger", admin.ledger),
   route("POST", "/api/admin/kill-switch", admin.killSwitch),
+  route("GET", "/api/admin/templates", admin.listTemplatesRoute),
+  route("POST", "/api/admin/templates", admin.createTemplateRoute),
+  route("GET", "/api/admin/templates/:id", admin.getTemplateRoute),
+  route("PATCH", "/api/admin/templates/:id", admin.patchTemplateRoute),
+  route("DELETE", "/api/admin/templates/:id", admin.deleteTemplateRoute),
 ];
 
 const MEDIA_PREFIX = "/api/media/";

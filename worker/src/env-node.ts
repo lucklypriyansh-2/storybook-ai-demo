@@ -51,6 +51,7 @@ export function getEnv(): NodeEnv {
     WORKER_SESSION_SECRET: requireEnv("WORKER_SESSION_SECRET"),
     ...(process.env.OPENROUTER_API_KEY ? { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY } : {}),
     ...(process.env.FAL_KEY ? { FAL_KEY: process.env.FAL_KEY } : {}),
+    ...(process.env.ADMIN_TOKEN ? { ADMIN_TOKEN: process.env.ADMIN_TOKEN } : {}),
     ...(process.env.ENABLE_OPENROUTER ? { ENABLE_OPENROUTER: process.env.ENABLE_OPENROUTER } : {}),
     ...(process.env.ENABLE_FAL ? { ENABLE_FAL: process.env.ENABLE_FAL } : {}),
     ...(process.env.KILL_SWITCH ? { KILL_SWITCH: process.env.KILL_SWITCH } : {}),

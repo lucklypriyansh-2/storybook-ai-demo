@@ -11,6 +11,8 @@ import { ConsentList, Grownups } from './screens/Grownups';
 import { Make } from './screens/Make';
 import { Paywall } from './screens/Paywall';
 import { Shelf } from './screens/Shelf';
+import { Catalog } from './screens/Catalog';
+import { Admin } from './screens/Admin';
 import type { DataApi } from './data';
 
 export default function App({ api }: { api?: DataApi }) {
@@ -20,7 +22,7 @@ export default function App({ api }: { api?: DataApi }) {
 function Shell() {
   const s = useStore();
   const dark = s.route === 'feed' || s.route === 'welcome';
-  const tabs = s.route === 'feed' || s.route === 'make' || s.route === 'shelf' || s.route === 'grownups';
+  const tabs = s.route === 'feed' || s.route === 'make' || s.route === 'catalog' || s.route === 'shelf' || s.route === 'grownups';
   let body: React.ReactNode;
   if (s.error && String(s.error).includes('worker_session_required')) body = <InviteGate />;
   else if (s.error) body = <div className="body cream"><Nibbs mood="sad" width={140} /><h2>Something went wrong</h2><p className="cap">{s.error}</p><Btn onClick={() => location.reload()}>Try again</Btn></div>;
@@ -44,6 +46,8 @@ function Screen({ r }: { r: Route }) {
       <div className="spacer" /><Btn style={{ marginTop: 16 }} onClick={() => s.go('make', 'first')}>Continue</Btn>
       <p className="cap" style={{ textAlign: 'center', marginTop: 8 }}><a href={`${import.meta.env.BASE_URL}privacy/`}>Privacy policy</a></p></div>;
     case 'make': return s.arg === 'first' ? <FirstMake /> : <Make />;
+    case 'catalog': return <Catalog />;
+    case 'admin': return <Admin />;
     case 'shelf': return <Shelf />;
     case 'grownups': return <Grownups />;
     case 'book': return <BookReader />;
@@ -68,7 +72,7 @@ function Welcome() {
 
 function Tabbar({ dark }: { dark: boolean }) {
   const s = useStore();
-  const t: [string, string, Route][] = [['🎬', 'Reels', 'feed'], ['✨', 'Make', 'make'], ['📚', 'Shelf', 'shelf'], ['🔒', 'Grown-ups', 'grownups']];
+  const t: [string, string, Route][] = [['🎬', 'Reels', 'feed'], ['📖', 'Catalog', 'catalog'], ['✨', 'Make', 'make'], ['📚', 'Shelf', 'shelf'], ['🔒', 'Grown-ups', 'grownups']];
   return <nav className={`tabbar2${dark ? ' dk' : ''}`}>{t.map(([i, l, r]) => <button key={l} className={s.route === r ? 'on' : ''} aria-label={l} onClick={() => r === 'grownups' ? s.askGate('Grown-ups area', () => s.go('grownups')) : s.go(r)}><b>{i}</b>{l}</button>)}</nav>;
 }
 

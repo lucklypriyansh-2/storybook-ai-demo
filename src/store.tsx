@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { makeApi, type Book, type Consent, type ConsentKind, type DataApi, type Household, type PublishItem, type Reel, type RenderJob, type Template } from './data';
 import { fill } from './data/seed';
+import { applyOverrides, loadBookPages } from './data/bookPages';
 import { pumpRenders } from './render/worker';
 
-export type Route = 'welcome' | 'consent' | 'feed' | 'make' | 'shelf' | 'grownups' | 'book' | 'paywall';
+export type Route = 'welcome' | 'consent' | 'feed' | 'make' | 'catalog' | 'admin' | 'shelf' | 'grownups' | 'book' | 'paywall';
 export type GateFor = { why: string; then: () => void };
 interface Ctx {
   api: DataApi; ready: boolean; error: string | null; hh: Household | null; name: string;
@@ -17,7 +18,7 @@ interface Ctx {
 }
 const C = createContext<Ctx>(null as unknown as Ctx);
 export const useStore = () => useContext(C);
-const ROUTES: Route[] = ['welcome', 'consent', 'feed', 'make', 'shelf', 'grownups', 'book', 'paywall'];
+const ROUTES: Route[] = ['welcome', 'consent', 'feed', 'make', 'catalog', 'admin', 'shelf', 'grownups', 'book', 'paywall'];
 export const ONBOARD_KEY = 'starringme.onboarded';
 
 export function StoreProvider({ children, api: given }: { children: ReactNode; api?: DataApi }) {
@@ -40,17 +41,29 @@ export function StoreProvider({ children, api: given }: { children: ReactNode; a
   const [renderProg, setRenderProg] = useState<Record<string, number>>({});
   const urls = useRef(new Map<string, string>());
   const tt = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const aliveRef = useRef(true); // mirrors the mount effect's `alive` so `refresh` can bail after unmount
 
   const refresh = useCallback(async () => {
     const [h, t, r, b, c, p, j] = await Promise.all([api.household(), api.templates(), api.reels(), api.books(), api.consents(), api.publishQueue(), api.jobs()]);
-    setHh(h); setTemplates(t); setReels(r); setBooks(b); setConsents(c); setPublish(p); setJobs(j);
+    // R.5.2: per-page edits live in localStorage and are overlaid on the derived
+    // template pages, so an edit survives reloads on every backend.
+    const overrides = loadBookPages();
+    // The awaits above can resolve after the provider unmounts or after the test
+    // env (jsdom window) is torn down; setState then throws (react-dom reads
+    // window.event), so bail out before touching state.
+    if (!aliveRef.current || typeof window === 'undefined') return;
+    setHh(h); setTemplates(t); setReels(r); setBooks(b.map(x => applyOverrides(x, overrides))); setConsents(c); setPublish(p); setJobs(j);
   }, [api]);
   useEffect(() => {
     let off = () => {};
-    const pump = () => pumpRenders(api, (id, p) => setRenderProg(x => ({ ...x, [id]: p })));
-    api.init().then(refresh).then(() => { setReady(true); pump(); off = api.onReels(r => { setReels(r); api.jobs().then(setJobs).catch(() => {}); if (r.some(x => x.status === 'queued')) pump(); }); })
-      .catch(e => setError(String(e?.message ?? e)));
-    return () => off();
+    let alive = true; // don't set state after the provider unmounts (avoids post-teardown setState)
+    aliveRef.current = true;
+    // state is safe to set while mounted and while the env (jsdom window) still exists
+    const safe = () => alive && typeof window !== 'undefined';
+    const pump = () => pumpRenders(api, (id, p) => { if (safe()) setRenderProg(x => ({ ...x, [id]: p })); });
+    api.init().then(refresh).then(() => { if (!safe()) return; setReady(true); pump(); off = api.onReels(r => { if (!safe()) return; setReels(r); api.jobs().then(j => { if (safe()) setJobs(j); }).catch(() => {}); if (r.some(x => x.status === 'queued')) pump(); }); })
+      .catch(e => { if (safe()) setError(String(e?.message ?? e)); });
+    return () => { alive = false; aliveRef.current = false; off(); };
   }, [api, refresh]);
   useEffect(() => { // revoke object URLs for video versions no reel points at any more
     const live = new Set(reels.map(r => r.video_url));

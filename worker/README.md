@@ -4,9 +4,12 @@ Portable Node backend for the storybook reels app. Implements the budget and
 security design in `../docs/ai-backend/BUDGET-SECURITY-DESIGN.md`. Runs free on
 **Vercel Hobby + Turso (libSQL)** — no Cloudflare, no paid plan required.
 
-Status: M0/M1. Auth, health, consent, kids, photos, reel enqueue+run, job
-status, admin ledger/kill-switch, character-sheet job, reel pipeline, and
-motion jobs all implemented. fal is disabled until keys are provided.
+Status: M0/M1 + Rev 2 Phase B. Auth, health, consent, kids, photos, reel
+enqueue+run, job status, the public catalog, admin catalog CRUD + bootstrap,
+character-sheet preview, per-page book text, admin ledger/kill-switch, the
+character-sheet job, the reel pipeline, and motion jobs are implemented. fal is
+disabled until keys are provided. Catalog rows are PLACEHOLDER sample content
+owned by this product — no licensed IP is imported.
 
 ## Run tests
 
@@ -73,11 +76,43 @@ LIBSQL_URL="libsql://…" LIBSQL_AUTH_TOKEN="…" \
     .then(r => console.log('updated', r.rowsAffected)))" "$H"
 ```
 
+## Rev 2 Phase B routes
+
+```
+GET    /api/catalog                        # enabled templates (public, no session)
+GET    /api/catalog/:id                    # template detail + shot meta (public)
+GET    /api/kids/:id/character_sheet       # { sheet_url, version, updated_at }; 404 if no blob
+PATCH  /api/reels/:id/pages/:index         # { text } → saves a per-page override
+DELETE /api/reels/:id/pages/:index         # clears the override (revert to template)
+POST   /api/admin/bootstrap                # X-Admin-Token == ADMIN_TOKEN → is_admin=1 for the session
+GET    /api/admin/templates                # requireAdmin
+POST   /api/admin/templates                # requireAdmin
+PATCH  /api/admin/templates/:id            # requireAdmin
+DELETE /api/admin/templates/:id            # requireAdmin
+```
+
+`GET /api/health` now also reports `flags.ffmpeg` (boolean, `null` until the
+first probe) and `sweep: { interval_ms, tmp_max_age_ms }`.
+
+### Admin bootstrap
+
+`users.is_admin` is still granted out of band. The bootstrap route is a
+convenience: set `ADMIN_TOKEN` in the environment (no value ships in this repo),
+sign in as the target account, then
+
+```sh
+curl -X POST "$API/api/admin/bootstrap" -H "X-Admin-Token: $ADMIN_TOKEN" -b "sb_session=…"
+```
+
+With `ADMIN_TOKEN` unset the route returns **503 `admin_token_unset`**. The token
+is compared in constant time, never echoed, and never logged.
+
 ## Environment
 
 | Name | Required? | Purpose |
 |---|---|---|
 | `WORKER_SESSION_SECRET` | yes | HMAC key for session cookies + signed media URLs |
+| `ADMIN_TOKEN` | optional | Enables `POST /api/admin/bootstrap`; unset → 503. Never logged. |
 | `LIBSQL_URL` | prod | Turso libSQL URL (default `file:./.data/worker.db` locally) |
 | `LIBSQL_AUTH_TOKEN` | prod | Turso auth token (omit for `file:` URLs) |
 | `OPENROUTER_API_KEY` | optional | Paid image/text; unused while `ENABLE_OPENROUTER=0` or missing |

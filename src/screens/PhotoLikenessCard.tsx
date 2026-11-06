@@ -58,6 +58,8 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  // No stored blob (older sheet) → the honest "coming shortly" chip, not a fake image.
+  const [previewMissing, setPreviewMissing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [parentName, setParentName] = useState('');
   const [others, setOthers] = useState(false);
@@ -75,7 +77,9 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
   useEffect(() => {
     if (!hasSheet || !api.characterSheet) return;
     let on = true;
-    api.characterSheet().then(r => { if (on) setSignedUrl(r.sheet_url); }).catch(() => {});
+    api.characterSheet()
+      .then(r => { if (on) { setSignedUrl(r.sheet_url); setPreviewMissing(!r.sheet_url); } })
+      .catch(() => { if (on) setPreviewMissing(true); });
     return () => { on = false; };
   }, [api, hasSheet]);
 
@@ -108,7 +112,7 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
       });
       if (stale()) return;
       if (job.status === 'failed') { setErr(likenessErrorCopy(job.error ?? 'failed')); setPhase('failed'); return; }
-      if (api.characterSheet) { try { const r = await api.characterSheet(); setSignedUrl(r.sheet_url); } catch { /* keep honest chip */ } }
+      if (api.characterSheet) { try { const r = await api.characterSheet(); setSignedUrl(r.sheet_url); setPreviewMissing(!r.sheet_url); } catch { /* keep honest chip */ } }
       setPhase('ready');
       s.toast('✨ AI likeness ready');
       onSheetReady?.();
@@ -133,8 +137,11 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
 
     {showPreview && <div data-testid="ai-preview" style={{ marginTop: 8, position: 'relative', borderRadius: 18, overflow: 'hidden', minHeight: 150, background: 'var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       {signedUrl
-        ? <img src={signedUrl} alt={`AI drawing of ${kidName}`} style={{ width: '100%', display: 'block' }} />
-        : <div style={{ padding: 20, textAlign: 'center' }}><div style={{ fontSize: 34 }}>🖼️</div><span className="chip">Preview coming shortly</span></div>}
+        ? <img src={signedUrl} alt={`AI drawing of ${kidName}`} style={{ width: '100%', display: 'block' }} data-testid="ai-preview-img" />
+        : <div style={{ padding: 20, textAlign: 'center' }} data-testid="ai-preview-missing">
+            <div style={{ fontSize: 34 }}>🖼️</div>
+            <span className="chip">{previewMissing ? 'Preview coming shortly' : 'Loading drawing…'}</span>
+          </div>}
     </div>}
 
     {busy && <div data-testid="likeness-progress" style={{ marginTop: 10 }}>

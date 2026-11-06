@@ -10,6 +10,8 @@ export interface Env {
   OPENROUTER_API_KEY?: string;
   FAL_KEY?: string;
   WORKER_SESSION_SECRET: string;
+  /** Operator-only secret enabling POST /api/admin/bootstrap. Never logged. */
+  ADMIN_TOKEN?: string;
 
   ENABLE_OPENROUTER?: string;
   ENABLE_FAL?: string;
