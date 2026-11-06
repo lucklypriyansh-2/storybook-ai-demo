@@ -5,14 +5,26 @@ import { COSTS } from "../config/costs";
 import { MODELS } from "../config/models";
 import { livePaid, makeProviders, pickFreeImage } from "../providers";
 import { keys } from "../storage/r2";
+import { characterSheetPrompt, hintsOrNull, serializeHints, type Hints } from "../util/hints";
 import { KillSwitchOn } from "../util/errors";
 import { uuid } from "../util/uuid";
 import { setProgress } from "./state";
 
-type JobRow = { kid_id: string | null; photo_id: string | null };
+type JobRow = { kid_id: string | null; photo_id: string | null; payload: string | null };
+
+/** The look sent with this render, if any. Falls back to the latest saved row. */
+function jobHints(payload: string | null): Hints | null {
+  if (!payload) return null;
+  try {
+    const parsed = JSON.parse(payload) as { hints?: unknown };
+    return hintsOrNull(parsed.hints);
+  } catch {
+    return null; // a malformed payload degrades to "no hints", never a failed job
+  }
+}
 
 export async function characterSheetJob(env: Env, jobId: string): Promise<void> {
-  const job = await env.DB.prepare("SELECT kid_id, photo_id FROM jobs WHERE id = ?")
+  const job = await env.DB.prepare("SELECT kid_id, photo_id, payload FROM jobs WHERE id = ?")
     .bind(jobId)
     .first<JobRow>();
   if (!job?.kid_id || !job.photo_id) throw new Error("character_sheet_missing_context");
@@ -28,6 +40,20 @@ export async function characterSheetJob(env: Env, jobId: string): Promise<void> 
     .bind(job.photo_id, kid.user_id)
     .first<{ r2_key: string }>();
   if (!photo) throw new Error("character_sheet_missing_photo");
+
+  // R.3.2: the look sent with *this* request wins, because it is what the parent
+  // just chose — and for a kid with no character row yet it is the only copy.
+  // Otherwise fall back to the latest saved row, so "Regenerate with edits"
+  // still honours a look saved earlier.
+  const latest = await env.DB.prepare(
+    "SELECT hints FROM characters WHERE kid_id = ? ORDER BY created_at DESC LIMIT 1",
+  )
+    .bind(job.kid_id)
+    .first<{ hints: string | null }>();
+  const sentHints = jobHints(job.payload);
+  const savedHints = hintsOrNull(latest?.hints);
+  const renderHints = sentHints ?? savedHints;
+  const prompt = characterSheetPrompt(renderHints);
 
   await setProgress(env, jobId, 10);
   if (await isKilled(env)) throw new KillSwitchOn();
@@ -53,8 +79,7 @@ export async function characterSheetJob(env: Env, jobId: string): Promise<void> 
     if (!stored) throw new Error("character_sheet_photo_missing");
 
     const result = await image.generate({
-      prompt:
-        "Character sheet for a children's storybook. Preserve the child's likeness, keep it gentle and consistent.",
+      prompt,
       image: {
         data: new Uint8Array(await stored.arrayBuffer()),
         mime: stored.httpMetadata?.contentType ?? "image/jpeg",
@@ -70,9 +95,12 @@ export async function characterSheetJob(env: Env, jobId: string): Promise<void> 
 
     const now = Date.now();
     await env.DB.batch([
+      // The look is stored on the row this render creates, so a hint-only
+      // regenerate for a brand-new kid is readable by GET afterwards rather than
+      // vanishing with the job.
       env.DB.prepare(
-        "INSERT INTO characters (id, kid_id, sheet_r2_key, model, created_at) VALUES (?, ?, ?, ?, ?)",
-      ).bind(sheetId, job.kid_id, sheetKey, model, now),
+        "INSERT INTO characters (id, kid_id, sheet_r2_key, model, hints, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind(sheetId, job.kid_id, sheetKey, model, serializeHints(renderHints), now),
       env.DB.prepare("UPDATE photos_tmp SET deleted_at = ? WHERE id = ?").bind(now, job.photo_id),
       env.DB.prepare("UPDATE jobs SET status = 'done', progress = 100, updated_at = ? WHERE id = ?")
         .bind(now, jobId),

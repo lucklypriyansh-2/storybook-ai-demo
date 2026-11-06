@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { Btn } from '../ui';
-import type { DataApi } from '../data';
+import { CharacterEditor } from './CharacterEditor';
+import type { DataApi, LookHints, SheetHints } from '../data';
 
 /**
  * Narrow Worker-only surface this card needs. LocalApi / SupabaseApi do not
@@ -10,34 +11,27 @@ import type { DataApi } from '../data';
 type SheetApi = DataApi & {
   uploadPhoto?: (file: File) => Promise<{ photo_id: string }>;
   createConsent?: (parentName: string, othersConsented: boolean) => Promise<{ consent_id: string }>;
-  requestCharacterSheet?: (photoId: string, consentId: string) => Promise<{ job_id: string }>;
+  requestCharacterSheet?: (
+    photoId: string | null, consentId: string, kidId?: string, hints?: LookHints | null,
+  ) => Promise<{ job_id: string }>;
   pollJob?: (
     jobId: string,
     opts?: { onTick?: (j: { progress?: number }) => void },
   ) => Promise<{ status: string; error?: string; progress?: number }>;
-  characterSheet?: () => Promise<{ version: number; sheet_url: string | null; updated_at: string | null }>;
+  characterSheet?: () => Promise<{ version: number; sheet_url: string | null; updated_at: string | null; hints: SheetHints }>;
+  saveLookHints?: (hints: LookHints, kidId?: string) => Promise<{ ok: boolean; hints: SheetHints }>;
 };
 
 type Phase = 'idle' | 'picked' | 'uploading' | 'rendering' | 'ready' | 'failed';
 
-/** Error-code → child-friendly copy (design §2.5). Codes come from WorkerError.code or job.error. */
-export const LIKENESS_ERROR_COPY: Record<string, string> = {
-  photo_required: 'Please pick a photo first.',
-  photo_too_small: 'That photo looks too small — try a bigger one.',
-  photo_too_large: 'That photo is too big — try one under 8 MB.',
-  photo_type_not_allowed: 'Please use a JPEG, PNG or WebP photo.',
-  photo_not_found: 'That photo expired — upload a new one.',
-  photo_expired: 'Photo expired — upload a new one.',
-  consent_required: 'We need your consent before making the character.',
-  others_consent_required: 'Please tick that everyone in the photo is OK with this.',
-  rate_limited: 'That is today’s limit for characters — try again tomorrow.',
-  budget_exceeded: 'AI is paused today to stay in budget — try again tomorrow.',
-  kill_switch: 'AI is paused right now — stories still work.',
-  provider_disabled: 'AI is unavailable right now — try again later.',
-  openrouter_unsupported_url: 'The AI returned an unexpected image — please try again.',
-  openrouter_no_image: 'The AI did not return an image — please try again.',
-};
-export const likenessErrorCopy = (code: string) => LIKENESS_ERROR_COPY[code] ?? 'Something went wrong — please try again.';
+/**
+ * Error-code → child-friendly copy (design §2.5, Phase B #12). The table itself
+ * lives in `data/errorCopy` so every screen shares one wording; this stays as the
+ * named export the likeness card and Book reader already import.
+ */
+export { ERROR_COPY as LIKENESS_ERROR_COPY, errorCopy as likenessErrorCopy } from '../data/errorCopy';
+// Imported for this module's own use too (a re-export does not bind locally).
+import { errorCopy as likenessErrorCopy } from '../data/errorCopy';
 
 /**
  * Mirror Make.tsx's name sanitising before consent is POSTed: strip non-letter marks,
@@ -63,6 +57,8 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
   const [err, setErr] = useState<string | null>(null);
   const [parentName, setParentName] = useState('');
   const [others, setOthers] = useState(false);
+  // R.3.2 avatar editor, opened from the preview once a sheet exists.
+  const [editingLook, setEditingLook] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelled = useRef(false);
   /** Bumped on every start(); a poll from a superseded run must not touch state. */
@@ -85,6 +81,14 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
 
   // Non-Worker backends: no card at all (keeps trait-avatar flow untouched).
   if (!api.uploadPhoto || !api.createConsent || !api.requestCharacterSheet || !api.pollJob) return null;
+
+  /** Re-reads the sheet after an edit so the preview shows the new drawing. */
+  const reloadSheet = () => {
+    if (!api.characterSheet) return;
+    api.characterSheet()
+      .then(r => { setSignedUrl(r.sheet_url); setPreviewMissing(!r.sheet_url); })
+      .catch(() => setPreviewMissing(true));
+  };
 
   const pick = (f: File | null) => {
     setErr(null); setProgress(0);
@@ -131,7 +135,9 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
   return <div className="card" data-testid="photo-likeness" style={{ marginTop: 12, textAlign: 'left' }}>
     <div className="row" style={{ justifyContent: 'space-between' }}>
       <b>🧑‍🎨 AI likeness (optional)</b>
-      <span className="cap">{showPreview ? 'ready' : 'photo → AI drawing'}</span>
+      {showPreview && api.saveLookHints
+        ? <button className="linkish" style={{ margin: 0 }} onClick={() => setEditingLook(v => !v)} aria-expanded={editingLook} data-testid="edit-look">🎨 Edit look</button>
+        : <span className="cap">{showPreview ? 'ready' : 'photo → AI drawing'}</span>}
     </div>
     <p className="cap" style={{ marginTop: 4, textAlign: 'left' }}>Add one clear photo and we draw {kidName} as a storybook character. Skip it and the cartoon avatar below is used instead.</p>
 
@@ -143,6 +149,13 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
             <span className="chip">{previewMissing ? 'Preview coming shortly' : 'Loading drawing…'}</span>
           </div>}
     </div>}
+
+    {showPreview && editingLook && <CharacterEditor
+      kidId={kidId}
+      kidName={kidName}
+      onClose={() => setEditingLook(false)}
+      onChanged={reloadSheet}
+    />}
 
     {busy && <div data-testid="likeness-progress" style={{ marginTop: 10 }}>
       <b style={{ fontSize: 14 }}>{phase === 'uploading' ? 'Uploading photo…' : 'Nibbs is drawing the character…'}</b>
@@ -175,6 +188,9 @@ export function PhotoLikenessCard({ kidId, kidName, onSheetReady }: { kidId: str
 
     {err && <p className="cap" data-testid="likeness-error" style={{ marginTop: 8, textAlign: 'left', color: 'var(--danger)' }}>{err}</p>}
     {phase === 'failed' && <Btn kind="ghost" style={{ marginTop: 8 }} onClick={() => { setErr(null); setPhase('picked'); }}>Try again</Btn>}
-    <p className="cap" style={{ marginTop: 8, textAlign: 'left' }}>Design intent: photos deleted in 24 h — pending implementation verification.</p>
+    {/* Backed by sweepPhotos + sweep_tmp.spec.ts ("soft-deletes a photo older than
+        24h and removes its R2 object"). Still a promise about the server, not about
+        any particular cron host. */}
+    <p className="cap" style={{ marginTop: 8, textAlign: 'left' }} data-testid="photo-retention">Your photo is deleted within 24 hours, and straight after the drawing is made.</p>
   </div>;
 }

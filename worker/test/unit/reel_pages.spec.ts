@@ -61,8 +61,15 @@ describe("PATCH/DELETE /api/reels/:id/pages/:index", () => {
 
     const patched = await patchPage(await ctxFor(db, r2, { method: "PATCH", body: { text: "my new words" } }, { id: REEL, index: "1" }));
     expect(patched.status).toBe(200);
-    const pageBody = (await patched.json()) as { page: { index: number; text: string; keyframe_url: string | null } };
-    expect(pageBody.page).toEqual({ index: 1, text: "my new words", keyframe_url: null });
+    const pageBody = (await patched.json()) as {
+      page: { index: number; text: string; edited: boolean; keyframe_url: string | null; keyframe_edited: boolean };
+      regenerated: string[];
+    };
+    // A manual text edit spends nothing and redraws nothing: the keyframe is the
+    // stored one, still served as a signed URL.
+    expect(pageBody.page).toMatchObject({ index: 1, text: "my new words", edited: true, keyframe_edited: false });
+    expect(pageBody.page.keyframe_url).toMatch(/^https:\/\/api\.example\.dev\/api\/media\/reels\/reel_1\/shot-1\.png\?exp=/);
+    expect(pageBody.regenerated).toEqual(["text"]);
 
     const res = await get(await ctxFor(db, r2, {}, { id: REEL }));
     const body = (await res.json()) as { template_id: string; shots: { index: number; caption: string; edited: boolean; keyframe_url: string }[] };
@@ -99,9 +106,11 @@ describe("PATCH/DELETE /api/reels/:id/pages/:index", () => {
     const db = new FakeD1();
     const r2 = new FakeR2();
     await seed(db, r2);
+    // Neither words nor a regenerate flag: nothing to do, so the route says so
+    // rather than silently writing an empty page.
     await expect(
       patchPage(await ctxFor(db, r2, { method: "PATCH", body: { text: "   " } }, { id: REEL, index: "1" })),
-    ).rejects.toMatchObject({ status: 400, code: "text_required" });
+    ).rejects.toMatchObject({ status: 400, code: "text_or_regenerate_required" });
     await expect(
       patchPage(await ctxFor(db, r2, { method: "PATCH", body: { text: "hi" } }, { id: REEL, index: "0" })),
     ).rejects.toMatchObject({ status: 400, code: "invalid_page_index" });

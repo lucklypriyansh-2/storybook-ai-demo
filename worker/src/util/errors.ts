@@ -34,8 +34,11 @@ export class BadRequest extends ApiError {
 }
 
 export class NotFound extends ApiError {
-  constructor(message = "not_found") {
-    super(404, "not_found", message);
+  // The caller's specific code (`kid_not_found`, `page_not_found`, …) *is* the
+  // code: the SPA maps codes to child-friendly copy, so collapsing them all to a
+  // bare "not_found" would hand every screen the same unhelpful sentence.
+  constructor(code = "not_found") {
+    super(404, code, code);
     this.name = "NotFound";
   }
 }

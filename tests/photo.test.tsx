@@ -36,7 +36,7 @@ function fakeWorkerApi(overrides: Record<string, unknown> = {}) {
     requestCharacterSheet: vi.fn(async () => ({ job_id: 'j1' })),
     pollJob: vi.fn(async (_id: string, opts?: { onTick?: (j: unknown) => void }) => { opts?.onTick?.({ progress: 100 }); return { status: 'done', progress: 100 }; }),
     characterSheet: vi.fn(async () => ({ version: 1, sheet_url: null, updated_at: null })),
-    health: async () => ({ ok: true, build: 'test', flags: { openrouter: true, fal: false, kill: false } }),
+    health: async () => ({ ok: true, build: 'test', flags: { openrouter: true, fal: false, motion: false, kill: false } }),
     ...overrides,
   } as Record<string, unknown> & {
     uploadPhoto: ReturnType<typeof vi.fn>; createConsent: ReturnType<typeof vi.fn>;
@@ -132,15 +132,23 @@ describe('photo likeness card (T6–T7)', () => {
     expect(screen.getByTestId('avatar-chip')).toBeInTheDocument();
   });
 
-  it('shows the honest motion-paused line when the Worker reports fal=false (T9)', async () => {
-    mount(fakeWorkerApi());
+  it('shows the honest motion-paused line when the Worker reports motion=false (T9)', async () => {
+    mount(fakeWorkerApi({ health: async () => ({ ok: true, build: 'test', flags: { openrouter: false, fal: false, motion: false, kill: false } }) }));
     expect(await screen.findByTestId('motion-paused')).toHaveTextContent('Motion is paused today');
   });
 
-  it('never claims motion works even if VITE_HD_ENABLED is on but fal is false', async () => {
+  it('never claims motion works even if VITE_HD_ENABLED is on but motion is false', async () => {
     vi.stubEnv('VITE_HD_ENABLED', 'true');
-    mount(fakeWorkerApi());
+    mount(fakeWorkerApi({ health: async () => ({ ok: true, build: 'test', flags: { openrouter: true, fal: false, motion: false, kill: false } }) }));
     expect(await screen.findByTestId('motion-paused')).toBeInTheDocument();
+    vi.unstubAllEnvs();
+  });
+
+  it('drops the paused line when the Worker reports motion=true — but only with the build flag (§H)', async () => {
+    vi.stubEnv('VITE_HD_ENABLED', 'true');
+    mount(fakeWorkerApi({ health: async () => ({ ok: true, build: 'test', flags: { openrouter: true, fal: false, motion: true, kill: false } }) }));
+    await screen.findByTestId('make');
+    await waitFor(() => expect(screen.queryByTestId('motion-paused')).toBeNull());
     vi.unstubAllEnvs();
   });
 });

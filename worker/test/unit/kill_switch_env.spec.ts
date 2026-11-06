@@ -32,9 +32,9 @@ describe("env KILL_SWITCH wins over the D1 row (H-3)", () => {
     await expect(
       guardSpend({
         env: envFor(db, new FakeR2(), "1"),
-        provider: "fal",
-        estUsd: 0.025,
-        model: "fal-ai/wan-2.1/image-to-video",
+        provider: "openrouter",
+        estUsd: 0.075,
+        model: "google/gemini-omni-1.2-flash",
         step: "motion_i2v",
       }),
     ).rejects.toBeInstanceOf(KillSwitchOn);

@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { assertSafeVideoInput } from "../providers/fal";
+import { assertSafeVideoInput } from "../providers/openrouter_video";
 import { livePaid, pickProvider } from "../providers";
 import { COSTS, motionUsd, SHOT_SECONDS } from "../config/costs";
 import { MODELS } from "../config/models";
@@ -14,7 +14,7 @@ type MotionRow = { reel_id: string | null; user_id: string | null; payload: stri
 type Payload = { shot: number; keyframe_key: string };
 
 export async function motionI2VJob(env: Env, jobId: string): Promise<void> {
-  // Kill switch blocks the fal call before any provider work, even for an
+  // Kill switch blocks the paid render before any provider work, even for an
   // already-enqueued HD reel (H-3).
   if (await isKilled(env)) throw new KillSwitchOn();
 
@@ -31,14 +31,15 @@ export async function motionI2VJob(env: Env, jobId: string): Promise<void> {
 
   await setProgress(env, jobId, 20);
 
-  const paid = livePaid(env, "fal");
+  // Motion bills OpenRouter now (§H), same provider/cap as every other AI step.
+  const paid = livePaid(env, "openrouter");
   const video = pickProvider(env, "motion_i2v") as VideoGen;
   const ledger = paid
     ? await guardSpend({
         env,
-        provider: "fal",
+        provider: "openrouter",
         estUsd: motionUsd(SHOT_SECONDS),
-        model: MODELS.falI2V,
+        model: MODELS.openrouterVideo,
         step: "motion_i2v",
         userId: row.user_id ?? undefined,
       })
@@ -57,6 +58,8 @@ export async function motionI2VJob(env: Env, jobId: string): Promise<void> {
       );
     }
   } catch (err) {
+    // A failed/unsupported render leaves video_url null on the manifest: the
+    // reel keeps its still, and we never invent video bytes to look successful.
     if (ledger) await compensateSpend(env.DB, ledger);
     throw err;
   }

@@ -13,7 +13,8 @@
     "bundle": "esbuild src/node-server.ts --bundle --platform=node --format=esm --outfile=dist/server.mjs --packages=external"
   },
   "dependencies": {
-    "@libsql/client": "^0.14.0"
+    "@libsql/client": "^0.14.0",
+    "ffmpeg-static": "^5.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -24,5 +25,10 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "allowScripts": {
+    "ffmpeg-static@5.2.0": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
   }
 }

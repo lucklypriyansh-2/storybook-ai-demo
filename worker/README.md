@@ -7,9 +7,10 @@ security design in `../docs/ai-backend/BUDGET-SECURITY-DESIGN.md`. Runs free on
 Status: M0/M1 + Rev 2 Phase B. Auth, health, consent, kids, photos, reel
 enqueue+run, job status, the public catalog, admin catalog CRUD + bootstrap,
 character-sheet preview, per-page book text, admin ledger/kill-switch, the
-character-sheet job, the reel pipeline, and motion jobs are implemented. fal is
-disabled until keys are provided. Catalog rows are PLACEHOLDER sample content
-owned by this product — no licensed IP is imported.
+character-sheet job, the reel pipeline, and motion jobs are implemented. Paid
+providers are disabled until keys are provided; motion now runs on OpenRouter
+(`google/gemini-omni-1.2-flash`) rather than fal. Catalog rows are PLACEHOLDER sample
+content owned by this product — no licensed IP is imported.
 
 ## Run tests
 
@@ -76,23 +77,101 @@ LIBSQL_URL="libsql://…" LIBSQL_AUTH_TOKEN="…" \
     .then(r => console.log('updated', r.rowsAffected)))" "$H"
 ```
 
-## Rev 2 Phase B routes
+## Rev 2 Phase B/C routes
 
 ```
 GET    /api/catalog                        # enabled templates (public, no session)
 GET    /api/catalog/:id                    # template detail + shot meta (public)
-GET    /api/kids/:id/character_sheet       # { sheet_url, version, updated_at }; 404 if no blob
-PATCH  /api/reels/:id/pages/:index         # { text } → saves a per-page override
+GET    /api/kids/:id/character_sheet       # { sheet_url, version, updated_at, hints }; 404 if no blob
+PATCH  /api/kids/:id/character_sheet/hints # { hints } → saves the look, spends nothing
+POST   /api/kids/:id/character_sheet       # { consent_id, photo_id?, hints? } → render job
+PATCH  /api/reels/:id/pages/:index         # { text? , regenerate?: { caption?, keyframe?, hint? } }
 DELETE /api/reels/:id/pages/:index         # clears the override (revert to template)
+GET    /api/reels                          # rows echo `tier` + `template_id` (no per-reel GET needed)
 POST   /api/admin/bootstrap                # X-Admin-Token == ADMIN_TOKEN → is_admin=1 for the session
 GET    /api/admin/templates                # requireAdmin
 POST   /api/admin/templates                # requireAdmin
 PATCH  /api/admin/templates/:id            # requireAdmin
 DELETE /api/admin/templates/:id            # requireAdmin
+GET    /api/admin/templates/:id/preview    # requireAdmin, `?kid_id=` (A-04)
 ```
 
-`GET /api/health` now also reports `flags.ffmpeg` (boolean, `null` until the
-first probe) and `sweep: { interval_ms, tmp_max_age_ms }`.
+### Per-page regenerate (R.5.1)
+
+`PATCH /api/reels/:id/pages/:index` accepts two independent payloads:
+
+- `{ text }` — save the words verbatim. No AI call, no spend.
+- `{ regenerate: { caption?, keyframe?, hint? } }` — ask the AI for new ones.
+  Runs through the same provider/ledger stack as every other paid step, so it
+  honours the kill switch, the $10 cap and `provider_disabled`.
+
+Responds with the page's *effective* text plus `{ edited, keyframe_edited }` and
+`regenerated: ["caption"|"keyframe"|"text"]`, so the client renders the result
+without a follow-up GET. There is deliberately no `job_id`: one caption or
+keyframe is far below the reel pipeline's cost and the client would otherwise
+poll for a sub-second operation.
+
+Keyframe redraws use the image path (mock under `MOCK_PROVIDERS`, OpenRouter
+otherwise) and never touch the video provider — a still is not motion.
+
+### Motion (image→video) — OpenRouter Videos (§H)
+
+Motion runs through OpenRouter's Videos API, not fal: one `OPENROUTER_API_KEY`
+covers images, text and video. The flow is
+`POST /api/v1/videos` (with `frame_images: [{ …, frame_type: "first_frame" }]`)
+→ poll `GET /api/v1/videos/{id}` → download `GET .../content`. The default model
+is `google/gemini-omni-1.2-flash` at `duration: 3`, `aspect_ratio: "9:16"`,
+`generate_audio: false` — about **$0.023–0.025/s**, i.e. **~$0.07 per clip**.
+
+Motion is available when `ENABLE_OPENROUTER=1` **and** `OPENROUTER_API_KEY` is
+set; `flags.motion` on `GET /api/health` reports exactly that. `ENABLE_FAL`/
+`FAL_KEY` no longer gate HD or motion (`fal.ts` is retained but unused). A failed,
+timed-out or unsupported render is an honest failure: the page keeps its still,
+`video_url` stays `null`, the ledger pre-charge is compensated, and no bytes are
+ever fabricated.
+
+### Character look hints (R.3.2)
+
+`hints` is a closed vocabulary (`skin`, `hair`, `extras`, `outfit`, `style`),
+each clamped to 80 characters and stripped of control characters before it
+reaches a prompt. `GET .../character_sheet` returns the stored hints or `null`
+when the look was never edited. `POST .../character_sheet` accepts optional
+`hints` and an optional `photo_id`: with no `photo_id` it regenerates from the
+photo the previous sheet used, while that photo is still inside the retention
+window, and otherwise fails fast with **400 `photo_expired`** rather than
+queueing a job that can only fail later.
+
+### A-04 personalisation preview
+
+`GET /api/admin/templates/:id/preview?kid_id=` composes the preview from
+**already-stored** assets: the kid's existing character sheet is the overlay,
+and each shot contributes its caption. `keyframe_url` is `null` because catalog
+shots store no keyframe, and the SPA draws its bundled placeholder there. No
+image is generated for a preview, so nothing is spent; the response says
+`live: false` and never claims a provider call. Honest failures: 400
+`kid_id_required`, 400 `sheet_required`, 404 `kid_not_found`,
+404 `template_not_found`, 404 `template_has_no_shots`.
+
+### Photo retention (24h)
+
+`sweepPhotos` soft-deletes every `photos_tmp` row older than
+`PHOTOS_MAX_AGE_MS` (24h) and removes its R2 object first, then `sweepTmp`
+collects the `tmp/` orphans that leaves behind. `sweepAll` runs both on the same
+60s timer as `resetDaily`. This covers an upload that no job ever claimed, so
+the SPA's "deleted within 24 hours" copy is backed by code and tests
+(`sweep_tmp.spec.ts`) — not by any claim about the host's cron.
+
+### ffmpeg
+
+Resolution order: `FFMPEG_PATH` → the packaged `ffmpeg-static` binary →
+`ffmpeg` on `PATH`. A fire-and-forget probe runs at boot and is cached for
+`FFMPEG_PROBE_TTL_MS` (10 min). `GET /api/health` reads **only** the cache, so
+it never blocks on a spawn: `flags.ffmpeg` is `null` until a probe has resolved,
+then a boolean. Only the flag can become true — motion generation stays paused
+while `flags.motion` is false (see §H: motion follows OpenRouter, not fal).
+
+`GET /api/health` reports `sweep: { interval_ms, tmp_max_age_ms,
+photos_max_age_ms }`.
 
 ### Admin bootstrap
 
@@ -115,14 +194,15 @@ is compared in constant time, never echoed, and never logged.
 | `ADMIN_TOKEN` | optional | Enables `POST /api/admin/bootstrap`; unset → 503. Never logged. |
 | `LIBSQL_URL` | prod | Turso libSQL URL (default `file:./.data/worker.db` locally) |
 | `LIBSQL_AUTH_TOKEN` | prod | Turso auth token (omit for `file:` URLs) |
-| `OPENROUTER_API_KEY` | optional | Paid image/text; unused while `ENABLE_OPENROUTER=0` or missing |
-| `FAL_KEY` | optional | Image→video; unused while `ENABLE_FAL=0` or missing |
-| `ENABLE_OPENROUTER` | optional | `1` to use real OpenRouter when key present (default `0`) |
-| `ENABLE_FAL` | optional | `1` to use real fal when key present (default `0`) |
+| `OPENROUTER_API_KEY` | optional | Paid image/text **and motion video**; unused while `ENABLE_OPENROUTER=0` or missing |
+| `FAL_KEY` | optional | Retained but unused — fal no longer gates or bills motion (§H) |
+| `ENABLE_OPENROUTER` | optional | `1` to use real OpenRouter when key present (default `0`); also drives `flags.motion` |
+| `ENABLE_FAL` | optional | Retained but unused (default `0`) |
 | `KILL_SWITCH` | optional | `1` to short-circuit every paid call with 402 |
 | `MOCK_PROVIDERS` | optional | `1` forces mock adapters for every provider |
 | `ALLOWED_ORIGIN` | optional | CORS origin (default `https://lucklypriyansh-2.github.io`) |
 | `PUBLIC_API_BASE` | optional | Public origin for absolute signed media URLs |
+| `FFMPEG_PATH` | optional | Explicit ffmpeg binary; falls back to the packaged `ffmpeg-static`, then `PATH` |
 
 `MOCK_PROVIDERS=1` or a missing provider key always selects mocks, even if the
 corresponding `ENABLE_*` flag is on.

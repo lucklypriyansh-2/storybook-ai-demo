@@ -14,6 +14,8 @@ import { consumeReel } from "../budget/rate_limit";
 import { readFlags } from "../config/flags";
 import { MAX_PAGE_TEXT } from "../config/limits";
 import { getTemplate } from "../catalog/templates";
+import { regenerateCaption } from "../jobs/caption";
+import { regenerateKeyframe } from "../jobs/keyframe";
 import { maybeRunInline } from "../jobs/inline";
 import { keys } from "../storage/r2";
 import { mediaUrl } from "../storage/signed";
@@ -80,8 +82,14 @@ export async function create({ env, req }: Ctx): Promise<Response> {
     await assertHeadroom(env.DB, "openrouter", prechargeUsd("paid"));
   }
   if (tier === "hd") {
-    if (!flags.mockProviders && !flags.fal) throw new ProviderDisabled("fal");
-    await assertHeadroom(env.DB, "fal", SHOT_COUNT * SHOT_SECONDS * COSTS.motion_i2v.usdPerSecond);
+    // Motion is OpenRouter now (§H): gate on the same key/flag as every other
+    // paid step, and check its headroom — never fal's.
+    if (!flags.mockProviders && !flags.openrouter) throw new ProviderDisabled("openrouter");
+    await assertHeadroom(
+      env.DB,
+      "openrouter",
+      SHOT_COUNT * SHOT_SECONDS * COSTS.motion_i2v.usdPerSecond,
+    );
   }
 
   const reelId = uuid();
@@ -106,10 +114,16 @@ export async function create({ env, req }: Ctx): Promise<Response> {
   return Response.json({ reel_id: reelId, job_id: jobId });
 }
 
+/**
+ * R.5/#13: the list echoes `template_id` and `tier` so the SPA can bind a reel
+ * to its book straight from this payload. That removes the per-reel
+ * `GET /api/reels/:id` hydration fetch the client used to run for every row it
+ * did not already know about on a cold load.
+ */
 export async function list({ env, req }: Ctx): Promise<Response> {
   const session = await requireSession(env, req);
   const rows = await env.DB.prepare(
-    "SELECT id, status, created_at FROM reels WHERE user_id = ? ORDER BY created_at DESC",
+    "SELECT id, status, tier, template_id, created_at FROM reels WHERE user_id = ? ORDER BY created_at DESC",
   )
     .bind(session.user_id)
     .all();
@@ -144,23 +158,28 @@ export async function get({ env, req, params }: Ctx): Promise<Response> {
     .first<{ id: string; status: string; tier: string; template_id: string | null }>();
   if (!reel) throw new NotFound("reel_not_found");
 
-  const manifest = await env.R2.get(keys.reel(reel.id, "shots.json"));
-  const stored: ShotManifest[] = manifest ? ((await manifest.json()) as ShotManifest[]) : [];
+  const stored: ShotManifest[] = await readManifest(env, reel.id);
   const overrides = await pageOverrides(env, reel.id);
 
   // Serve signed 1h URLs, never raw R2 keys (H-9). Overrides are overlaid so
   // the SPA renders the edited page without extra round-trips (R.5.2).
+  // `index` is the manifest's, but an override for an index the manifest lost
+  // (partial write) is still shown rather than silently dropped.
+  const indexes = new Set<number>(stored.map((s) => s.index));
+  for (const i of overrides.keys()) indexes.add(i);
   const shots = await Promise.all(
-    stored.map(async (s) => {
-      const over = overrides.get(s.index);
-      const caption = over?.text ?? s.caption;
-      const key = over?.keyframe_key ?? s.keyframe_key;
+    [...indexes].sort((a, b) => a - b).map(async (index) => {
+      const s = stored.find((row) => row.index === index);
+      const over = overrides.get(index);
+      const caption = over?.text ?? s?.caption ?? "";
+      const key = over?.keyframe_key ?? s?.keyframe_key ?? null;
       return {
-        index: s.index,
+        index,
         caption,
-        edited: over !== undefined && over.text !== null,
+        edited: over?.text != null,
+        keyframe_edited: over?.keyframe_key != null && over.keyframe_key !== s?.keyframe_key,
         keyframe_url: key ? await mediaUrl(env, key) : null,
-        video_url: s.video_key ? await mediaUrl(env, s.video_key) : null,
+        video_url: s?.video_key ? await mediaUrl(env, s.video_key) : null,
       };
     }),
   );
@@ -174,10 +193,23 @@ export async function get({ env, req, params }: Ctx): Promise<Response> {
 }
 
 /**
- * R.5.3 per-page text edit — the only way to tweak a single caption without
- * redoing the whole reel. `regenerate` is not implemented yet, so a request
- * asking for it is answered with a synchronous text-only save and no job id
- * (no AI call is made, so nothing is spent).
+ * R.5.3 per-page edit. Two payloads, mutually exclusive:
+ *   `{ text }`                        — save the words verbatim (no AI, no spend);
+ *   `{ regenerate: { caption?, keyframe? } }` — ask the AI for new ones (R.5.1).
+ *
+ * Sending `text` together with `regenerate.caption` is refused with
+ * `ambiguous_page_patch`: the caption is a billed model call whose output the
+ * explicit text would immediately discard. `text` + `regenerate.keyframe` is
+ * fine — the redraw is of the words the parent is saving.
+ *
+ * A `regenerate` runs synchronously through the same provider/ledger stack as
+ * every other paid step, so it respects the kill switch, the $10 cap and
+ * `provider_disabled`. There is no job id: a single caption or keyframe is far
+ * below the reel pipeline's cost and the client would otherwise poll for a
+ * sub-second operation.
+ *
+ * Responses always carry the page's *effective* text and the override state, so
+ * the caller can render the result without a follow-up GET.
  */
 export async function patchPage({ env, req, params }: Ctx): Promise<Response> {
   const session = await requireSession(env, req);
@@ -185,39 +217,126 @@ export async function patchPage({ env, req, params }: Ctx): Promise<Response> {
   const index = Number.parseInt(params.index ?? "", 10);
   if (!Number.isInteger(index) || index < 1) throw new BadRequest("invalid_page_index");
 
-  const reel = await env.DB.prepare("SELECT id FROM reels WHERE id = ? AND user_id = ?")
+  const reel = await env.DB.prepare(
+    "SELECT id, kid_id, tier, story, template_id FROM reels WHERE id = ? AND user_id = ?",
+  )
     .bind(reelId, session.user_id)
-    .first<{ id: string }>();
+    .first<{ id: string; kid_id: string; tier: string; story: string; template_id: string | null }>();
   if (!reel) throw new NotFound("reel_not_found");
 
-  const body = await readJson<{ text?: unknown }>(req);
-  if (typeof body.text !== "string" || body.text.trim().length === 0) {
-    throw new BadRequest("text_required");
-  }
-  const text = body.text.trim().slice(0, MAX_PAGE_TEXT);
-  const now = Date.now();
+  const body = await readJson<{
+    text?: string;
+    regenerate?: { caption?: boolean; keyframe?: boolean; hint?: string };
+  }>(req);
 
+  const regen = body.regenerate;
+  const wantsCaption = regen?.caption === true;
+  const wantsKeyframe = regen?.keyframe === true;
+  const hasText = typeof body.text === "string" && body.text.trim().length > 0;
+  if (!hasText && !wantsCaption && !wantsKeyframe) throw new BadRequest("text_or_regenerate_required");
+  // `regenerate.caption` is a *live* model call: it pre-charges the ledger and
+  // bills OpenRouter. Accepting it alongside an explicit `text` would pay for a
+  // rewrite and then overwrite it with the parent's words (the applied order is
+  // caption → text), so nothing the parent sees would be the thing they paid
+  // for. Refuse the combination at the boundary instead of spending silently.
+  // A manual edit and a keyframe redraw *can* share a request: the keyframe
+  // regenerates from the page's own words and redraws nothing that was saved.
+  if (hasText && wantsCaption) throw new BadRequest("ambiguous_page_patch");
+
+  const now = Date.now();
   const existing = await env.DB.prepare(
     'SELECT text, keyframe_key FROM reel_page_overrides WHERE reel_id = ? AND "index" = ?',
   )
     .bind(reelId, index)
     .first<{ text: string | null; keyframe_key: string | null }>();
 
+  // The page's current words: an override if one exists, else the stored manifest.
+  const stored = await readManifest(env, reelId);
+  const manifestShot = stored.find((s) => s.index === index);
+  if (!manifestShot && !existing) throw new NotFound("page_not_found");
+  const baseCaption = existing?.text ?? manifestShot?.caption ?? "";
+  const baseKeyframe = existing?.keyframe_key ?? manifestShot?.keyframe_key ?? null;
+
+  let text = baseCaption;
+  let keyframeKey = baseKeyframe;
+  const applied: string[] = [];
+
+  if (wantsCaption) {
+    const hint = typeof regen?.hint === "string" ? regen.hint.trim().slice(0, 120) : undefined;
+    const out = await regenerateCaption(
+      env,
+      {
+        story: reel.story,
+        index,
+        pageCount: stored.length || 1,
+        current: baseCaption || null,
+        hint,
+      },
+      reel.tier as Tier,
+    );
+    if (out.text) {
+      text = out.text;
+      applied.push("caption");
+    }
+  }
+  if (hasText && typeof body.text === "string") {
+    text = body.text.trim().slice(0, MAX_PAGE_TEXT);
+    applied.push("text");
+  }
+  if (wantsKeyframe) {
+    const out = await regenerateKeyframe(env, {
+      reelId,
+      index,
+      kidId: reel.kid_id,
+      caption: text || baseCaption,
+      tier: reel.tier as Tier,
+    });
+    keyframeKey = out.key;
+    applied.push("keyframe");
+  }
+
+  const textChanged = text !== baseCaption;
+  const keyframeChanged = keyframeKey !== baseKeyframe;
+
   if (existing) {
     await env.DB.prepare(
-      'UPDATE reel_page_overrides SET text = ?, updated_at = ? WHERE reel_id = ? AND "index" = ?',
+      'UPDATE reel_page_overrides SET text = ?, keyframe_key = ?, updated_at = ? WHERE reel_id = ? AND "index" = ?',
     )
-      .bind(text, now, reelId, index)
+      .bind(textChanged ? text : existing.text, keyframeKey, now, reelId, index)
       .run();
-  } else {
+  } else if (textChanged || keyframeChanged) {
     await env.DB.prepare(
-      'INSERT INTO reel_page_overrides (reel_id, "index", text, keyframe_key, updated_at) VALUES (?, ?, ?, NULL, ?)',
+      'INSERT INTO reel_page_overrides (reel_id, "index", text, keyframe_key, updated_at) VALUES (?, ?, ?, ?, ?)',
     )
-      .bind(reelId, index, text, now)
+      .bind(reelId, index, textChanged ? text : null, keyframeKey, now)
       .run();
   }
 
-  return Response.json({ page: { index, text, keyframe_url: null }, saved: true });
+  return Response.json({
+    page: {
+      index,
+      text,
+      edited: textChanged,
+      keyframe_url: keyframeKey ? await mediaUrl(env, keyframeKey) : null,
+      keyframe_edited: keyframeChanged,
+    },
+    // Kept for the pre-R.5.1 client, which reads `saved`. True only for an
+    // explicit `text` write — a caption/keyframe regenerate is a preview the
+    // caller still has to Save, so reporting it as saved would be a lie.
+    saved: applied.includes("text"),
+    regenerated: applied,
+  });
+}
+
+async function readManifest(env: Env, reelId: string): Promise<ShotManifest[]> {
+  const manifest = await env.R2.get(keys.reel(reelId, "shots.json"));
+  if (!manifest) return [];
+  try {
+    const parsed = (await manifest.json()) as ShotManifest[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Clears an override so the page reverts to the template caption (R.5.3). */

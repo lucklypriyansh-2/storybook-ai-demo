@@ -108,9 +108,9 @@ export async function reelGenerateJob(env: Env, jobId: string): Promise<void> {
 
   if (ledger) await reconcileSpend(env.DB, ledger, actualUsd);
 
-  // hd adds one motion_i2v per shot. Each is headroom-checked; if fal's budget
-  // would be crossed the reel stays done with keyframes only and the parent job
-  // records how many shots were skipped.
+  // hd adds one motion_i2v per shot. Each is headroom-checked; if OpenRouter's
+  // budget would be crossed the reel stays done with keyframes only and the
+  // parent job records how many shots were skipped.
   if (tier === "hd") await enqueueMotion(env, reelId, shots, jobId);
 }
 
@@ -131,25 +131,25 @@ async function buildShotList(
 }
 
 async function enqueueMotion(env: Env, reelId: string, shots: Shot[], parentJobId: string): Promise<void> {
-  const falPaid = livePaid(env, "fal");
+  const motionPaid = livePaid(env, "openrouter");
   const perShot = motionUsd(SHOT_SECONDS);
   const eligible = shots.filter((s) => s.keyframe_key);
 
-  // H-10: pre-reserve fal budget for every shot in a single atomic guardSpend
-  // so two HD reels running at once cannot both satisfy a per-shot headroom
-  // check and later overspend the cap. On BudgetExceeded, skip every motion
-  // shot and record the parent-job error without inserting any motion jobs.
+  // H-10: pre-reserve OpenRouter budget for every shot in a single atomic
+  // guardSpend so two HD reels running at once cannot both satisfy a per-shot
+  // headroom check and later overspend the cap. On BudgetExceeded, skip every
+  // motion shot and record the parent-job error without inserting any jobs.
   let runnable = eligible.length;
   let skipped = 0;
   let reservation: string | null = null;
 
-  if (falPaid && runnable > 0) {
+  if (motionPaid && runnable > 0) {
     try {
       reservation = await guardSpend({
         env,
-        provider: "fal",
+        provider: "openrouter",
         estUsd: round6(runnable * perShot),
-        model: MODELS.falI2V,
+        model: MODELS.openrouterVideo,
         step: "motion_i2v_reserve",
       });
     } catch (err) {

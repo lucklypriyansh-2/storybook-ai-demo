@@ -50,6 +50,7 @@ const routes: Route[] = [
   route("POST", "/api/kids/:id/forget", kids.forget),
   route("POST", "/api/kids/:id/character_sheet", kids.characterSheet),
   route("GET", "/api/kids/:id/character_sheet", kids.characterSheetRead),
+  route("PATCH", "/api/kids/:id/character_sheet/hints", kids.characterSheetHints),
   route("POST", "/api/photos", photos.upload),
   route("POST", "/api/reels", reels.create),
   route("GET", "/api/reels", reels.list),
@@ -68,6 +69,7 @@ const routes: Route[] = [
   route("GET", "/api/admin/templates", admin.listTemplatesRoute),
   route("POST", "/api/admin/templates", admin.createTemplateRoute),
   route("GET", "/api/admin/templates/:id", admin.getTemplateRoute),
+  route("GET", "/api/admin/templates/:id/preview", admin.templatePreviewRoute),
   route("PATCH", "/api/admin/templates/:id", admin.patchTemplateRoute),
   route("DELETE", "/api/admin/templates/:id", admin.deleteTemplateRoute),
 ];
