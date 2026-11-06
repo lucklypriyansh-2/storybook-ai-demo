@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { create } from "../../src/routes/reels";
 import { SESSION_COOKIE, signSessionId } from "../../src/auth/session";
 import { sha256Hex } from "../../src/util/hash";
+import { currentSpend } from "../../src/budget/ledger";
 import type { Ctx } from "../../src/router";
 import type { Env, JobMessage } from "../../src/env";
 import { asD1, FakeD1 } from "./fake-d1";
@@ -11,10 +12,16 @@ const SECRET = "test-secret-not-real";
 const USER = "user_1";
 const KID = "kid_1";
 
-async function ctxFor(db: FakeD1, r2: FakeR2, body: unknown): Promise<Ctx> {
+async function ctxFor(
+  db: FakeD1,
+  r2: FakeR2,
+  body: unknown,
+  overrides: Partial<Env> = {},
+): Promise<Ctx> {
   const env = {
     DB: asD1(db), R2: asR2(r2), JOBS: { send: async (_m: JobMessage) => {} },
     WORKER_SESSION_SECRET: SECRET, MOCK_PROVIDERS: "1", ENABLE_FAL: "0", ENABLE_OPENROUTER: "0",
+    ...overrides,
   } as unknown as Env;
   const sig = await signSessionId(SECRET, "sess_1");
   return {
@@ -95,5 +102,71 @@ describe("POST /api/reels from the catalog", () => {
     const body = (await res.json()) as { reel_id: string };
     expect(db.reels.get(body.reel_id)!.story).toBe("A moon trip");
     expect(db.reels.get(body.reel_id)!.template_id).toBeNull();
+  });
+});
+
+describe("POST /api/reels HD gate is OpenRouter, not fal (§H)", () => {
+  /** The ctx a caller with a live session would send for an HD reel. */
+  async function hdCtx(db: FakeD1, overrides: Partial<Env>) {
+    return ctxFor(db, new FakeR2(), { kid_id: KID, template_id: "tpl_a", tier: "hd" }, overrides);
+  }
+
+  it("refuses HD with provider_disabled(openrouter) even when fal is enabled", async () => {
+    const db = new FakeD1();
+    await seed(db);
+    await expect(
+      create(
+        await hdCtx(db, {
+          MOCK_PROVIDERS: "0", ENABLE_OPENROUTER: "0", ENABLE_FAL: "1", FAL_KEY: "not-a-real-key",
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 503, code: "provider_disabled" });
+    // Honest failure: nothing is queued.
+    expect(db.reels.size).toBe(0);
+  });
+
+  it("accepts HD when openrouter is on and fal is off entirely", async () => {
+    const db = new FakeD1();
+    await seed(db);
+    const res = await create(
+      await hdCtx(db, {
+        MOCK_PROVIDERS: "0", ENABLE_OPENROUTER: "1", OPENROUTER_API_KEY: "not-a-real-key",
+        ENABLE_FAL: "0", FAL_KEY: undefined,
+      }),
+    );
+    const body = (await res.json()) as { reel_id: string };
+    expect(res.status).toBe(200);
+    expect(db.reels.get(body.reel_id)!.tier).toBe("hd");
+    // fal is never touched — the gate and any charge belong to openrouter.
+    expect(await currentSpend(asD1(db), "fal")).toBe(0);
+  });
+
+  it("checks HD headroom against openrouter's cap, not fal's", async () => {
+    const db = new FakeD1();
+    await seed(db);
+    // Leave just 1¢ on openrouter: not enough for the paid pre-charge ($0.234)
+    // and far short of the HD motion reserve — but the paid check fires first,
+    // so this proves the *openrouter* budget is what gates HD. fal stays at $0
+    // and is never consulted: if the gate still read fal, no 402 would surface.
+    db.budget.set("openrouter", { total_usd: 9.99, updated_at: 1 });
+    expect(await currentSpend(asD1(db), "fal")).toBe(0);
+
+    await expect(
+      create(
+        await hdCtx(db, {
+          MOCK_PROVIDERS: "0", ENABLE_OPENROUTER: "1", OPENROUTER_API_KEY: "not-a-real-key",
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 402, code: "budget_exceeded" });
+    expect(db.reels.size).toBe(0);
+  });
+
+  it("accepts HD under MOCK_PROVIDERS with no keys at all, charging nothing", async () => {
+    const db = new FakeD1();
+    await seed(db);
+    const res = await create(await hdCtx(db, { MOCK_PROVIDERS: "1", ENABLE_OPENROUTER: "0" }));
+    expect(res.status).toBe(200);
+    expect(await currentSpend(asD1(db), "openrouter")).toBe(0);
+    expect(await currentSpend(asD1(db), "fal")).toBe(0);
   });
 });

@@ -3,10 +3,15 @@ import { Nibbs } from '../mascot';
 import { useStore } from '../store';
 import { Btn } from '../ui';
 import { coverUrl } from './Catalog';
-import type { CatalogShot, CatalogTemplate, DataApi } from '../data';
+import { fill } from '../data/seed';
+import { errorCopy } from '../data/errorCopy';
+import type { CatalogShot, CatalogTemplate, DataApi, TemplatePreview } from '../data';
 
 /** Per-shot edit payload sent as `scene_prompts[]` on PATCH /api/admin/templates/:id. */
 type ShotPatch = { index: number; caption_prompt?: string; keyframe_prompt?: string | null };
+
+/** A kid row as `GET /api/kids` returns it — the preview picker's options. */
+type AdminKid = { id: string; display_name: string; has_sheet: boolean };
 
 /**
  * Worker-only surface this screen needs. Like PhotoLikenessCard, it runtime-checks
@@ -19,6 +24,7 @@ type AdminApi = DataApi & {
   adminCreateTemplate?: (patch: Partial<CatalogTemplate> & { title: string }) => Promise<unknown>;
   adminUpdateTemplate?: (id: string, patch: Partial<CatalogTemplate> & { scene_prompts?: ShotPatch[] }) => Promise<unknown>;
   adminDeleteTemplate?: (id: string) => Promise<{ ok: boolean }>;
+  adminTemplatePreview?: (id: string, kidId: string) => Promise<TemplatePreview>;
 };
 
 /** One editable shot in the admin editor (caption + optional keyframe prompt). */
@@ -50,6 +56,13 @@ export function Admin() {
   const [editTitle, setEditTitle] = useState('');
   const [shots, setShots] = useState<ShotDraft[]>([]);
   const [shotsLoading, setShotsLoading] = useState(false);
+  // A-04 personalisation preview: template + kid → what each page would look like.
+  const [kids, setKids] = useState<AdminKid[]>([]);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewKid, setPreviewKid] = useState<string>('');
+  const [preview, setPreview] = useState<TemplatePreview | null>(null);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   useEffect(() => {
     if (!api.me || api.mode !== 'worker') { setMode('local'); return; }
@@ -59,6 +72,35 @@ export function Admin() {
       .catch(e => { if (on) { setErr(String((e as Error)?.message ?? e)); setMode('error'); } });
     return () => { on = false; };
   }, [api]);
+
+  // The preview picker lists this household's kids (GET /api/kids, same session).
+  useEffect(() => {
+    if (mode !== 'eligible') return;
+    let on = true;
+    (api as DataApi & { kids?: () => Promise<{ kids: AdminKid[] }> }).kids?.()
+      .then(r => { if (on) setKids(r.kids ?? []); })
+      .catch(() => { /* the picker just stays empty; no invented names */ });
+    return () => { on = false; };
+  }, [api, mode]);
+
+  const openPreview = async (t: CatalogTemplate) => {
+    if (!api.adminTemplatePreview) return;
+    setPreviewId(t.id); setPreview(null); setPreviewErr(null);
+    setEditId(null);
+    // Default to the first kid; a sheet-less kid is a legitimate, explained result.
+    const kidId = previewKid || kids[0]?.id || '';
+    setPreviewKid(kidId);
+    if (!kidId) { setPreviewErr('No kids on this account yet.'); return; }
+    await runPreview(t.id, kidId);
+  };
+
+  const runPreview = async (templateId: string, kidId: string) => {
+    if (!api.adminTemplatePreview) return;
+    setPreviewBusy(true); setPreviewErr(null);
+    try { setPreview(await api.adminTemplatePreview(templateId, kidId)); }
+    catch (e) { setPreview(null); setPreviewErr(errorCopy(String((e as { code?: string })?.code ?? ''))); }
+    finally { setPreviewBusy(false); }
+  };
 
   const load = async () => {
     if (!api.adminTemplates) return;
@@ -141,6 +183,7 @@ export function Admin() {
       <h2>Operators only</h2>
       <p className="lead" data-testid="admin-operator-only">This area is for operators only. Admin access is granted by the server operator. There is no sign-up.</p>
       {mode === 'local' && <p className="cap">This build is on-device; the catalog lives in the cloud app.</p>}
+      {mode === 'non-admin' && <p className="cap" style={{ textAlign: 'left' }} data-testid="admin-bootstrap-hint">If you are the operator: set <code>ADMIN_TOKEN</code> on the server, sign in, then POST <code>/api/admin/bootstrap</code> with header <code>X-Admin-Token</code>. There is deliberately no way to do this from here.</p>}
       {err && <p className="cap" style={{ color: 'var(--danger)' }}>{err}</p>}
       <Btn kind="ghost" onClick={() => s.go('feed')}>Back to reels</Btn>
     </div>;
@@ -164,16 +207,23 @@ export function Admin() {
     <div className="cap sect">TEMPLATES ({templates.length})</div>
     <div className="card list" data-testid="admin-templates">
       {templates.length === 0 && <div className="cap">No templates yet.</div>}
-      {templates.map(t => <div className="row" key={t.id} data-testid={`admin-row-${t.id}`}>
-        <span className="img" style={{ width: 44, height: 58, borderRadius: 8, flexShrink: 0, backgroundImage: `url(${coverUrl(t.cover)})` }} />
-        <div style={{ flex: 1 }}>
-          <b>{t.title}</b>
-          <div className="cap">ages {t.age_band} · {t.page_count} pages · {t.enabled ? 'live' : 'hidden'}</div>
-        </div>
-        <button className="linkish" style={{ margin: 0 }} disabled={busy} onClick={() => toggle(t)} aria-label={`${t.enabled ? 'Disable' : 'Enable'} ${t.title}`}>{t.enabled ? 'Disable' : 'Enable'}</button>
-        <button className="linkish" style={{ margin: 0 }} disabled={busy} onClick={() => remove(t)} aria-label={`Delete ${t.title}`}>Delete</button>
-        {api.adminTemplateDetail && <button className="linkish" style={{ margin: 0 }} disabled={busy} onClick={() => openEditor(t)} aria-label={`Edit prompts for ${t.title}`} data-testid={`admin-edit-${t.id}`}>Edit prompts</button>}
-      </div>)}
+      {templates.map(t => {
+        // #14: accessible names use the same filled, human title the row shows
+        // (`fill(t.title, kidName)`), not the raw `{name}` template. The raw
+        // token stays in the API body where it belongs.
+        const shown = fill(t.title, s.name);
+        return <div className="row" key={t.id} data-testid={`admin-row-${t.id}`}>
+          <span className="img" style={{ width: 44, height: 58, borderRadius: 8, flexShrink: 0, backgroundImage: `url(${coverUrl(t.cover)})` }} />
+          <div style={{ flex: 1 }}>
+            <b>{shown}</b>
+            <div className="cap">ages {t.age_band} · {t.page_count} pages · {t.enabled ? 'live' : 'hidden'}</div>
+          </div>
+          <button className="linkish" style={{ margin: 0 }} disabled={busy} onClick={() => toggle(t)} aria-label={`${t.enabled ? 'Disable' : 'Enable'} ${shown}`}>{t.enabled ? 'Disable' : 'Enable'}</button>
+          <button className="linkish" style={{ margin: 0 }} disabled={busy} onClick={() => remove(t)} aria-label={`Delete ${shown}`}>Delete</button>
+          {api.adminTemplateDetail && <button className="linkish" style={{ margin: 0 }} disabled={busy} onClick={() => openEditor(t)} aria-label={`Edit prompts for ${shown}`} data-testid={`admin-edit-${t.id}`}>Edit prompts</button>}
+          {api.adminTemplatePreview && <button className="linkish" style={{ margin: 0 }} disabled={busy} onClick={() => openPreview(t)} aria-label={`Preview personalisation for ${shown}`} data-testid={`admin-preview-${t.id}`}>Preview</button>}
+        </div>;
+      })}
     </div>
 
     {editId && <div className="card" style={{ marginTop: 14 }} data-testid="admin-shot-editor">
@@ -209,6 +259,50 @@ export function Admin() {
         <Btn kind="ghost" disabled={busy} onClick={() => setShots(list => [...list, { index: (list.at(-1)?.index ?? 0) + 1, caption_prompt: '', keyframe_prompt: '' }])} data-testid="editor-add-shot">Add shot</Btn>
         <Btn disabled={busy || !editTitle.trim()} onClick={saveEditor} data-testid="editor-save">Save prompts</Btn>
       </div>
+    </div>}
+
+    {previewId && <div className="card" style={{ marginTop: 14 }} data-testid="admin-preview">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <b>A-04 · personalisation preview</b>
+        <button className="x" aria-label="Close personalisation preview" onClick={() => { setPreviewId(null); setPreview(null); }}>✕</button>
+      </div>
+      <p className="cap" style={{ textAlign: 'left' }}>Composed from the kid's existing AI drawing over the story's placeholder art. No new images are generated for a preview, so nothing is spent.</p>
+
+      <label className="cap" htmlFor="preview-kid">Show as</label>
+      <select
+        id="preview-kid"
+        className="card field"
+        value={previewKid}
+        disabled={previewBusy}
+        onChange={e => { setPreviewKid(e.target.value); void runPreview(previewId, e.target.value); }}
+        data-testid="preview-kid"
+      >
+        {kids.length === 0 && <option value="">No kids yet</option>}
+        {kids.map(k => <option key={k.id} value={k.id}>{k.display_name}{k.has_sheet ? '' : ' (no drawing yet)'}</option>)}
+      </select>
+
+      {previewBusy && <p className="cap" data-testid="preview-loading">Building preview…</p>}
+      {previewErr && <p className="cap" data-testid="preview-error" style={{ color: 'var(--danger)' }}>{previewErr}</p>}
+
+      {preview && <div data-testid="preview-shots" style={{ marginTop: 10 }}>
+        <div className="cap" style={{ textAlign: 'left' }}>{preview.kid.display_name} · {preview.shots.length} pages</div>
+        <div className="eplist" style={{ marginTop: 8 }}>
+          {preview.shots.map(shot => <div className="card" key={shot.index} style={{ marginTop: 8, textAlign: 'left' }} data-testid={`preview-shot-${shot.index}`}>
+            <div className="img" role="img" aria-label={`Page ${shot.index} preview`} style={{
+              height: 120, borderRadius: 12, position: 'relative', overflow: 'hidden',
+              backgroundImage: `url(${coverUrl(shot.keyframe_url)})`, backgroundSize: 'cover',
+            }}>
+              {/* The kid's own drawing is the overlay — never a fabricated image. */}
+              {preview.overlay_url && <span className="img" style={{
+                position: 'absolute', right: 8, bottom: 8, width: 56, height: 56, borderRadius: 99,
+                border: '3px solid #fff', backgroundImage: `url(${preview.overlay_url})`, backgroundSize: 'cover',
+              }} data-testid={`preview-overlay-${shot.index}`} />}
+            </div>
+            <b style={{ display: 'block', marginTop: 6 }}>Page {shot.index}</b>
+            <div className="cap">{fill(shot.caption, preview.kid.display_name)}</div>
+          </div>)}
+        </div>
+      </div>}
     </div>}
 
     <div style={{ height: 20 }} />

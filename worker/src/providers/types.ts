@@ -33,7 +33,7 @@ export type TextGen = {
 };
 
 export type VideoGen = {
-  id: "fal-wan-2.1-i2v" | "mock-video";
+  id: "openrouter-gemini-omni-1.2-flash-i2v" | "fal-wan-2.1-i2v" | "mock-video";
   estUsd(opts: VideoOpts): number;
   i2v(opts: VideoOpts): Promise<GenResult<{ bytes: Uint8Array; seconds: number }>>;
 };

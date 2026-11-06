@@ -45,7 +45,7 @@ function fakeWorkerApi(overrides: Record<string, unknown> = {}) {
     catalog: vi.fn(async () => CATALOG),
     catalogDetail: vi.fn(async (id: string) => ({ template: CATALOG.find(t => t.id === id)!, shots: [{ index: 1, caption_prompt: '{name} meets a tiny mouse.', keyframe_prompt: null }] })),
     generateFromTemplate: vi.fn(async () => ({ reel_id: 'r9', job_id: 'j9' })),
-    health: vi.fn(async () => ({ ok: true, build: 'test', flags: { openrouter: true, fal: false, kill: false, ffmpeg: true } })),
+    health: vi.fn(async () => ({ ok: true, build: 'test', flags: { openrouter: true, fal: false, motion: true, kill: false, ffmpeg: true } })),
     adminTemplates: vi.fn(async () => CATALOG),
     adminTemplateDetail: vi.fn(async (id: string) => ({ template: CATALOG.find(t => t.id === id)!, shots: [{ index: 1, caption_prompt: '{name} meets a tiny mouse.', keyframe_prompt: null }] })),
     adminCreateTemplate: vi.fn(async () => ({})),
@@ -74,12 +74,23 @@ describe('Catalog browse + story detail (§R.1.3/§R.1.4)', () => {
     expect(api.catalog).toHaveBeenCalledOnce();
   });
 
-  it('shows an honest HD-paused badge when the Worker reports fal=false', async () => {
-    render(<StoreProvider api={fakeWorkerApi() as never}><Ready which="catalog" /></StoreProvider>);
+  it('shows an honest HD-paused badge when the Worker reports motion=false (§H: no fal gate)', async () => {
+    // fal=true on purpose: motion must follow the new OpenRouter signal, not fal.
+    const api = fakeWorkerApi({
+      health: vi.fn(async () => ({ ok: true, build: 'test', flags: { openrouter: true, fal: true, motion: false, kill: false, ffmpeg: true } })),
+    });
+    render(<StoreProvider api={api as never}><Ready which="catalog" /></StoreProvider>);
     await screen.findByTestId('catalog-card-tpl_cloud_whale');
     const badges = screen.getAllByTestId('tier-badge').map(n => n.textContent);
     expect(badges).toContain('free');
     expect(badges).toContain('🎞 HD — paused');
+  });
+
+  it('shows a live HD badge when the Worker reports motion=true (§H)', async () => {
+    render(<StoreProvider api={fakeWorkerApi() as never}><Ready which="catalog" /></StoreProvider>);
+    await screen.findByTestId('catalog-card-tpl_cloud_whale');
+    const badges = screen.getAllByTestId('tier-badge').map(n => n.textContent);
+    expect(badges).toContain('🎞 HD');
   });
 
   it('opens story detail with personalised shot captions and generates from template_id', async () => {
@@ -115,7 +126,9 @@ describe('Admin gate (§R.2.1 — no password field)', () => {
     expect(await screen.findByTestId('admin-templates')).toBeInTheDocument();
     // Wait for the rows (not just the container) before clicking a row control.
     await screen.findByTestId('admin-row-tpl_lighthouse_mouse');
-    fireEvent.click(screen.getByLabelText('Disable {name} and the Lighthouse Mouse'));
+    // #14: row controls are labelled with the *filled* title (the kid's name), so a
+    // screen reader hears what the operator sees — never the raw "{name}" token.
+    fireEvent.click(screen.getByLabelText('Disable Mira and the Lighthouse Mouse'));
     await waitFor(() => expect(api.adminUpdateTemplate).toHaveBeenCalledWith('tpl_lighthouse_mouse', { enabled: false }));
     expect(document.querySelector('input[type="password"]')).toBeNull();
   });

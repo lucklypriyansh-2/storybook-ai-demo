@@ -3,12 +3,19 @@ import { readFlags } from "../config/flags";
 import type { Tier } from "../config/costs";
 import { mediaUrl } from "../storage/signed";
 import { ProviderDisabled } from "../util/errors";
-import { makeFalVideo } from "./fal";
 import { makeMockImage, makeMockText, makeMockVideo } from "./mock";
 import { makeOpenRouterImage, makeOpenRouterText } from "./openrouter";
+import { makeOpenRouterVideo } from "./openrouter_video";
 import type { ImageGen, TextGen, VideoGen } from "./types";
 
 export type ProviderSet = { image: ImageGen; text: TextGen; video: VideoGen; mocked: boolean };
+
+/**
+ * Paid steps now bill through OpenRouter for images, text **and** motion (§H).
+ * `fal` stays in the union only so historical ledger rows still typecheck; no
+ * live path selects it.
+ */
+export type PaidStep = "openrouter" | "fal";
 
 /** Free path always resolves to the mock in the portable build (no Workers AI). */
 export function pickFreeImage(_env: Env): ImageGen {
@@ -20,7 +27,7 @@ export function pickFreeImage(_env: Env): ImageGen {
  * a key is present, and providers are not mocked. Jobs use this to decide
  * whether to touch the ledger — mocked/disabled steps stay at $0.
  */
-export function livePaid(env: Env, provider: "openrouter" | "fal"): boolean {
+export function livePaid(env: Env, provider: PaidStep): boolean {
   const flags = readFlags(env);
   if (flags.mockProviders) return false;
   return provider === "openrouter"
@@ -54,9 +61,11 @@ export function makeProviders(env: Env): ProviderSet {
     text = makeMockText();
   }
 
+  // Motion is OpenRouter now (§H): no fal gate, no fal key. Same rule as images —
+  // the flag must be on AND a key present, else we stay on the mock.
   const video: VideoGen =
-    !mock && flags.fal && env.FAL_KEY
-      ? makeFalVideo(env.FAL_KEY, (key) => mediaUrl(env, key))
+    !mock && flags.openrouter && env.OPENROUTER_API_KEY
+      ? makeOpenRouterVideo(env.OPENROUTER_API_KEY, (key) => mediaUrl(env, key))
       : makeMockVideo();
 
   return { image, text, video, mocked: mock };
@@ -90,6 +99,14 @@ export function pickProvider(
     return set.text;
   }
 
-  if (!flags.mockProviders && !flags.fal) throw new ProviderDisabled("fal");
+  // Motion follows OpenRouter, not fal (§H). Honesty rule: a keyless OpenRouter
+  // must not silently "succeed" as a mock for a paid HD request, so we throw —
+  // but the message never names fal.
+  if (!flags.mockProviders && !flags.openrouter) throw new ProviderDisabled("openrouter");
+  // Flag on but no key: `set.video` is the mock here, which is only acceptable
+  // for a free-tier request. A paid HD render must fail loudly instead.
+  if (!flags.mockProviders && tier !== "free" && set.video.id === "mock-video") {
+    throw new ProviderDisabled("openrouter");
+  }
   return set.video;
 }

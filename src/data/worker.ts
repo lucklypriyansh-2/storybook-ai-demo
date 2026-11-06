@@ -39,7 +39,22 @@ function toCatalogTemplate(row: RowTemplate): CatalogTemplate {
 
 /** A kid as the Worker returns it (docs/ai-backend/BUDGET-SECURITY-DESIGN.md §6). */
 type WorkerKid = { id: string; display_name: string; has_sheet: boolean };
-type WorkerReel = { id: string; status: string; tier: string; created_at: number };
+/** `template_id` is echoed by the list route (Phase C #13) so no N+1 fetch is needed. */
+type WorkerReel = { id: string; status: string; tier?: string; template_id?: string | null; created_at: number };
+
+/** R.3.2 avatar-editor hints: the parent-editable description of the look. */
+export type LookHints = { skin: string; hair: string; extras: string; outfit: string; style: string };
+export type SheetHints = LookHints | null;
+export const EMPTY_LOOK_HINTS: LookHints = { skin: '', hair: '', extras: '', outfit: '', style: '' };
+
+/** R.2.2 A-04 admin preview shape. `keyframe_url`/`overlay_url` are signed URLs or null. */
+export type TemplatePreview = {
+  template_id: string;
+  kid: { id: string; display_name: string };
+  live: boolean;
+  overlay_url: string | null;
+  shots: { index: number; keyframe_url: string | null; caption: string; prompt: string | null }[];
+};
 
 /**
  * Cloudflare Worker backend (worker/). Activated when VITE_API_URL is baked in at build time.
@@ -147,8 +162,8 @@ export class WorkerApi implements DataApi {
   async health() {
     return this.req<{
       ok: boolean; build: string;
-      flags: { openrouter: boolean; fal: boolean; kill: boolean; ffmpeg: boolean | null };
-      sweep?: { interval_ms: number; tmp_max_age_ms: number };
+      flags: { openrouter: boolean; fal: boolean; motion?: boolean; kill: boolean; ffmpeg: boolean | null };
+      sweep?: { interval_ms: number; tmp_max_age_ms: number; photos_max_age_ms?: number };
     }>('/api/health');
   }
   async logout() { await this.req('/api/auth/logout', { method: 'POST' }); this.persistToken(''); }
@@ -186,9 +201,28 @@ export class WorkerApi implements DataApi {
     return this.req<{ photo_id: string }>('/api/photos', { method: 'POST', body: form });
   }
 
-  async requestCharacterSheet(photoId: string, consentId: string, kidId = this.kidId): Promise<{ job_id: string }> {
+  /**
+   * Queues a sheet render. `photoId` may be omitted when the kid already has a
+   * sheet — the Worker then regenerates from the retained photo (R.3.2) and
+   * answers `photo_expired` when there is none left.
+   */
+  async requestCharacterSheet(
+    photoId: string | null, consentId: string, kidId = this.kidId, hints?: LookHints | null,
+  ): Promise<{ job_id: string }> {
     return this.req<{ job_id: string }>(`/api/kids/${kidId}/character_sheet`, {
-      method: 'POST', body: JSON.stringify({ photo_id: photoId, consent_id: consentId }),
+      method: 'POST',
+      body: JSON.stringify({
+        ...(photoId ? { photo_id: photoId } : {}),
+        consent_id: consentId,
+        ...(hints ? { hints } : {}),
+      }),
+    });
+  }
+
+  /** R.3.2 "Save look": stores hints on the current sheet without regenerating. */
+  async saveLookHints(hints: LookHints, kidId = this.kidId): Promise<{ ok: boolean; hints: SheetHints }> {
+    return this.req<{ ok: boolean; hints: SheetHints }>(`/api/kids/${kidId}/character_sheet/hints`, {
+      method: 'PATCH', body: JSON.stringify({ hints }),
     });
   }
 
@@ -205,8 +239,9 @@ export class WorkerApi implements DataApi {
   }
 
   /** Latest character-sheet row for a kid; `sheet_url` is a signed 1h URL when a blob is stored. */
-  async characterSheet(kidId = this.kidId): Promise<{ version: number; sheet_url: string | null; updated_at: string | null }> {
-    return this.req<{ version: number; sheet_url: string | null; updated_at: string | null }>(`/api/kids/${kidId}/character_sheet`);
+  async characterSheet(kidId = this.kidId): Promise<{ version: number; sheet_url: string | null; updated_at: string | null; hints: SheetHints }> {
+    const out = await this.req<{ version: number; sheet_url: string | null; updated_at: string | null; hints?: SheetHints }>(`/api/kids/${kidId}/character_sheet`);
+    return { ...out, hints: out.hints ?? null };
   }
 
   // ---- reels ----
@@ -295,29 +330,48 @@ export class WorkerApi implements DataApi {
    * (catalog path). Runs on every `reels()` for rows still missing meta, so a
    * reel that lands later (another tab, a background job completing) still gets a
    * book — the empty/partial first load no longer freezes hydration (review #3).
-   * A reel is only marked hydrated once its row is known; a transient failure
-   * leaves it eligible for a retry on the next call.
+   *
+   * Phase C #13: `GET /api/reels` now echoes `template_id`, so a row that
+   * already carries one is bound straight from the list payload. Only rows the
+   * server did *not* annotate (an older Worker, or a non-catalog reel) fall back
+   * to a per-reel `GET /api/reels/:id`, which was previously one fetch per row
+   * on every cold load. A failed fetch stays eligible for a retry next call.
    */
   private async hydrateCatalogTemplates(rows: WorkerReel[]): Promise<void> {
-    const targets = rows
-      .filter(r => !this.reelMeta.has(r.id) && !this.hydratedReels.has(r.id))
-      .slice(0, 10);
-    if (targets.length === 0) return;
-    await Promise.all(targets.map(async (r) => {
+    const unknown = rows.filter(r => !this.reelMeta.has(r.id) && !this.hydratedReels.has(r.id));
+    if (unknown.length === 0) return;
+
+    // Cheap path first: no network beyond what getList() already paid for.
+    const needsFetch: WorkerReel[] = [];
+    for (const r of unknown) {
+      if (typeof r.template_id === 'string' && r.template_id) {
+        this.hydratedReels.add(r.id);
+        await this.bindTemplate(r.id, r.template_id);
+      } else if (r.template_id === null) {
+        // Server explicitly says "no template" — no point fetching again.
+        this.hydratedReels.add(r.id);
+      } else {
+        needsFetch.push(r);
+      }
+    }
+
+    await Promise.all(needsFetch.slice(0, 10).map(async (r) => {
       let reel: Awaited<ReturnType<WorkerApi['getReel']>>;
       try { reel = await this.getReel(r.id); }
       catch { return; /* transient: retry on the next reels() call */ }
       this.hydratedReels.add(r.id);
-      const templateId = reel.template_id;
-      if (!templateId) return;
-      const t = await this.resolveTemplate(templateId);
-      this.reelMeta.set(r.id, {
-        template_id: templateId,
-        state: { ...(t?.default_state ?? { scene: '', outfit: '', co_star: 'nibbs', text: '' }) },
-        version: 1,
-      });
+      if (reel.template_id) await this.bindTemplate(r.id, reel.template_id);
     }));
     this.saveMeta();
+  }
+
+  private async bindTemplate(reelId: string, templateId: string): Promise<void> {
+    const t = await this.resolveTemplate(templateId);
+    this.reelMeta.set(reelId, {
+      template_id: templateId,
+      state: { ...(t?.default_state ?? { scene: '', outfit: '', co_star: 'nibbs', text: '' }) },
+      version: 1,
+    });
   }
 
   // ---- per-page book text (R.5): client localStorage + server override ----
@@ -340,6 +394,33 @@ export class WorkerApi implements DataApi {
     try { await this.req(`/api/reels/${encodeURIComponent(reelId)}/pages/${index}`, { method: 'DELETE' }); }
     catch { /* server copy may not exist; local reset already applied */ }
     return { ok: true };
+  }
+
+  /**
+   * R.5.1 "Regenerate this page (AI)": preview only. The Worker runs the call
+   * synchronously and answers with the proposed text, which is handed back to
+   * the editor draft — nothing is written locally or on the server here. The
+   * parent's explicit Save is what persists it (via `saveBookPageText`), and
+   * Cancel discards it; a regenerate that persisted itself would make "Save to
+   * keep them" a lie and leave the AI text on the page after Cancel.
+   *
+   * The call is still real and billed, so a failure is surfaced rather than
+   * swallowed — the caller decides the copy (ledger/kill/provider codes).
+   */
+  async regenerateBookPage(
+    reelId: string, bookId: string, index: number, opts: { caption?: boolean; keyframe?: boolean; hint?: string } = {},
+  ): Promise<{ text: string; keyframe_url: string | null; regenerated: string[] }> {
+    void bookId; // preview only: the page is persisted by saveBookPageText, not here
+    const out = await this.req<{
+      page: { index: number; text: string; keyframe_url: string | null };
+      regenerated?: string[];
+    }>(`/api/reels/${encodeURIComponent(reelId)}/pages/${index}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        regenerate: { caption: opts.caption !== false, ...(opts.keyframe ? { keyframe: true } : {}), ...(opts.hint ? { hint: opts.hint } : {}) },
+      }),
+    });
+    return { text: out.page.text, keyframe_url: out.page.keyframe_url, regenerated: out.regenerated ?? [] };
   }
 
   // ---- admin catalog (R.2, requireAdmin server-side) ----
@@ -373,6 +454,12 @@ export class WorkerApi implements DataApi {
   }
   async adminDeleteTemplate(id: string) {
     return this.req<{ ok: boolean }>(`/api/admin/templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+  /** R.2.2 A-04: what each page would look like for one kid. Costs nothing — see the route. */
+  async adminTemplatePreview(id: string, kidId: string): Promise<TemplatePreview> {
+    return this.req<TemplatePreview>(
+      `/api/admin/templates/${encodeURIComponent(id)}/preview?kid_id=${encodeURIComponent(kidId)}`,
+    );
   }
 
   private mapStatus(status: string): Reel['status'] {

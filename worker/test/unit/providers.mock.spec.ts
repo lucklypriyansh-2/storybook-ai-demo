@@ -132,7 +132,10 @@ describe("openrouter adapter", () => {
   });
 });
 
-describe("fal adapter", () => {
+// `fal.ts` is retained but no longer selected by any code path (§H moved motion
+// to OpenRouter). Its tests stay so the module does not rot silently — the live
+// motion adapter is covered in openrouter_video.spec.ts.
+describe("fal adapter (retained, unused)", () => {
   const sign = async (key: string) => `https://api.example.dev/api/media/${key}?exp=1&sig=x`;
 
   it("refuses tmp/ input keys at the assertion boundary", () => {

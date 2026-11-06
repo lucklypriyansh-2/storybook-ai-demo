@@ -3,7 +3,9 @@ import { SupabaseApi } from './supabase';
 import { WorkerApi } from './worker';
 import type { DataApi } from './types';
 export * from './types';
-export { WorkerApi, WorkerError } from './worker';
+export * from './errorCopy';
+export { WorkerApi, WorkerError, EMPTY_LOOK_HINTS } from './worker';
+export type { LookHints, SheetHints, TemplatePreview } from './worker';
 /** Priority: Cloudflare Worker (VITE_API_URL) > Supabase > on-device LocalApi. */
 export function makeApi(env: Record<string, string | undefined> = import.meta.env): DataApi {
   const apiUrl = env.VITE_API_URL;

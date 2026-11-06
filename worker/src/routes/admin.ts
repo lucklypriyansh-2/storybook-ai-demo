@@ -14,6 +14,8 @@ import {
   type ShotPatch,
 } from "../catalog/templates";
 import { setKillSwitch } from "../budget/kill_switch";
+import { MAX_PREVIEW_SHOTS } from "../config/limits";
+import { mediaUrl, publicBase } from "../storage/signed";
 import { readJson } from "../util/http";
 import { timingSafeEqual } from "../util/hash";
 import { ApiError, BadRequest } from "../util/errors";
@@ -94,6 +96,72 @@ export async function listTemplatesRoute({ env, req }: Ctx): Promise<Response> {
   await requireAdmin(env, req);
   const rows = await listTemplates(env.DB);
   return Response.json({ templates: rows.map(toDto) });
+}
+
+/**
+ * R.2.2 A-04 admin personalisation preview. Shows, for one template + one kid,
+ * what each page's keyframe would look like — without spending money.
+ *
+ * Cost discipline (documented choice): the preview composes from *already
+ * stored* assets rather than generating anything.
+ *   - The kid's existing character sheet is the personalisation overlay
+ *     (`overlay_url`), rendered by the SPA over the shot's stock still.
+ *   - `keyframe_url` is the template shot's own stored image when the catalog
+ *     has one; it is `null` otherwise, and the SPA falls back to its bundled
+ *     placeholder — never a fabricated URL.
+ *
+ * Under MOCK_PROVIDERS, or when the template has no stored keyframes, this
+ * still returns the placeholder shots, so the admin can check the composition
+ * on a box with no provider keys at all. A template with no shots is a 404 with
+ * a clear code, and a kid with no sheet is a 400 `sheet_required` — the same
+ * honesty rule the reel route uses.
+ */
+export async function templatePreviewRoute({ env, req, params }: Ctx): Promise<Response> {
+  const session = await requireAdmin(env, req);
+  const templateId = params.id ?? "";
+  const kidId = new URL(req.url).searchParams.get("kid_id") ?? "";
+
+  const template = await getTemplate(env.DB, templateId);
+  if (!template) throw new ApiError(404, "template_not_found");
+
+  if (!kidId) throw new BadRequest("kid_id_required");
+  const kid = await env.DB.prepare(
+    "SELECT id, display_name FROM kids WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+  )
+    .bind(kidId, session.user_id)
+    .first<{ id: string; display_name: string }>();
+  if (!kid) throw new ApiError(404, "kid_not_found");
+
+  const sheet = await env.DB.prepare(
+    "SELECT sheet_r2_key FROM characters WHERE kid_id = ? ORDER BY created_at DESC LIMIT 1",
+  )
+    .bind(kidId)
+    .first<{ sheet_r2_key: string }>();
+  if (!sheet?.sheet_r2_key) throw new BadRequest("sheet_required");
+
+  const shots = await getShots(env.DB, template.id);
+  if (shots.length === 0) throw new ApiError(404, "template_has_no_shots");
+
+  const base = publicBase(env);
+  const overlayUrl = await mediaUrl(env, sheet.sheet_r2_key);
+  const preview = shots.slice(0, MAX_PREVIEW_SHOTS).map((shot) => ({
+    index: shot.index,
+    // No per-shot keyframe is stored on catalog rows today, so this is honestly
+    // null and the SPA composes the placeholder still for admins to check.
+    keyframe_url: null,
+    caption: shot.caption_prompt,
+    prompt: shot.keyframe_prompt,
+  }));
+
+  return Response.json({
+    template_id: template.id,
+    kid: { id: kid.id, display_name: kid.display_name },
+    // True only when a *live* provider could be used; never a claim that one was.
+    live: false,
+    base,
+    overlay_url: overlayUrl,
+    shots: preview,
+  });
 }
 
 export async function getTemplateRoute({ env, req, params }: Ctx): Promise<Response> {

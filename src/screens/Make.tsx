@@ -35,7 +35,7 @@ export function Make({ first }: { first?: boolean }) {
     {first ? <Btn style={{ marginTop: 16 }} disabled={busy} onClick={() => make('moon')} data-testid="make-first">Make {name || 'Mira'}'s first reel</Btn>
       : <><Btn kind="ghost" style={{ marginTop: 14 }} onClick={async () => { await saveChar(); s.toast('✓ Character saved'); }}>Save character</Btn>
         <div className="cap sect">NEW EPISODE</div>
-        {!motionState.available && <p className="cap" data-testid="motion-paused" style={{ textAlign: 'left', marginBottom: 8 }}>🎞 Motion is paused today · stories still work.{hdEnabled() && motionState.checked && !motionState.fal ? ' (video key missing)' : ''}</p>}
+        {!motionState.available && <p className="cap" data-testid="motion-paused" style={{ textAlign: 'left', marginBottom: 8 }}>🎞 Motion is paused today · stories still work.{hdEnabled() && motionState.checked && !motionState.motion ? ' (video key missing)' : ''}</p>}
         <div className="eplist">{s.templates.map(t => <button key={t.id} className="card pick" disabled={busy} onClick={() => make(t.id)} aria-label={`New reel ${fill(t.title, name)}`}>
           <span className="img" style={{ width: 54, height: 80, borderRadius: 12, flexShrink: 0, backgroundImage: `url(${img(t.cover)})` }} /><span><b>{fill(t.title, name)}</b><span className="cap" style={{ display: 'block' }}>{t.mode} · ~{t.duration_s}s · free</span></span></button>)}</div></>}
   </div>;

@@ -88,6 +88,6 @@ describe("motion_i2v under mocked providers", () => {
     });
     const { env } = mockEnv(db, r2);
 
-    await expect(motionI2VJob(env, "m1")).rejects.toThrow(/fal_unsafe_input_key/);
+    await expect(motionI2VJob(env, "m1")).rejects.toThrow(/unsafe_video_input_key/);
   });
 });

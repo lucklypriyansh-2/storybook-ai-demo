@@ -16,7 +16,7 @@ type CatalogApi = DataApi & {
   generateFromTemplate?: (
     templateId: string, tier: 'free' | 'paid' | 'hd', kidId?: string, useSheet?: boolean,
   ) => Promise<{ reel_id: string; job_id: string }>;
-  health?: () => Promise<{ flags?: { fal?: boolean } }>;
+  health?: () => Promise<{ flags?: { fal?: boolean; openrouter?: boolean; motion?: boolean } }>;
 };
 
 /** `local:` covers ship with the SPA; anything else is already an absolute (signed) URL. */
@@ -26,10 +26,16 @@ export function coverUrl(cover: string | null): string {
   return cover;
 }
 
-/** Tier badge — motion is paused whenever the Worker reports fal=false (never faked). */
-export function tierBadge(tier: string, fal: boolean): string {
-  if (tier === 'hd') return fal ? '🎞 HD' : '🎞 HD — paused';
-  if (tier === 'paid') return '✨ paid';
+/**
+ * Tier badge. Anything that would need a provider is marked "paused" when that
+ * provider is off (Phase B #11): since §H both HD (motion) and paid bill through
+ * OpenRouter, so both follow `openrouter` and neither reads fal. We never print
+ * a bare "paid"/"HD" on a box where tapping the story would fail — the badge is
+ * a promise about what tapping the story will actually do.
+ */
+export function tierBadge(tier: string, motion: boolean, openrouter = true): string {
+  if (tier === 'hd') return motion ? '🎞 HD' : '🎞 HD — paused';
+  if (tier === 'paid') return openrouter ? '✨ paid' : '✨ paid — paused';
   return 'free';
 }
 
@@ -37,7 +43,11 @@ export function Catalog() {
   const s = useStore();
   const api = s.api as CatalogApi;
   const [templates, setTemplates] = useState<CatalogTemplate[] | null>(null);
-  const [fal, setFal] = useState(false);
+  // Motion availability follows OpenRouter (§H); fal is no longer consulted.
+  const [motion, setMotion] = useState(false);
+  // Default true until the Worker says otherwise: we only downgrade a badge when
+  // we have actually been told the provider is off (never invent "paused").
+  const [openrouter, setOpenrouter] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ template: CatalogTemplate; shots: CatalogShot[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -46,7 +56,7 @@ export function Catalog() {
     if (!api.catalog) { setTemplates([]); return; }
     let on = true;
     api.catalog().then(t => on && setTemplates(t)).catch(e => on && setErr(String((e as Error)?.message ?? e)));
-    api.health?.().then(h => on && setFal(!!h.flags?.fal)).catch(() => {});
+    api.health?.().then(h => { if (!on) return; setMotion(!!(h.flags?.motion ?? h.flags?.openrouter)); setOpenrouter(!!h.flags?.openrouter); }).catch(() => {});
     return () => { on = false; };
   }, [api]);
 
@@ -61,7 +71,7 @@ export function Catalog() {
     if (!api.generateFromTemplate) { s.toast('Catalog needs the cloud backend'); return; }
     setBusy(true);
     try {
-      const tier = (t.tier_default === 'hd' && fal ? 'hd' : t.tier_default === 'paid' ? 'paid' : 'free') as 'free' | 'paid' | 'hd';
+      const tier = (t.tier_default === 'hd' && motion ? 'hd' : t.tier_default === 'paid' ? 'paid' : 'free') as 'free' | 'paid' | 'hd';
       // Only ask the Worker to use a sheet when the kid actually has one; the
       // server rejects use_sheet=true for a sheet-less kid (honesty, review #5).
       const hasSheet = s.hh?.character.id.startsWith('sheet:') ?? false;
@@ -96,7 +106,7 @@ export function Catalog() {
         </span>
         <span style={{ flex: 1 }}>
           <b>{fill(t.title, name)}</b>
-          <span className="cap" style={{ display: 'block' }}>Ages {t.age_band} · {t.page_count} pages · <span className={`tier ${t.tier_default}`} data-testid="tier-badge">{tierBadge(t.tier_default, fal)}</span></span>
+          <span className="cap" style={{ display: 'block' }}>Ages {t.age_band} · {t.page_count} pages · <span className={`tier ${t.tier_default}`} data-testid="tier-badge">{tierBadge(t.tier_default, motion, openrouter)}</span></span>
           <span className="cap" style={{ display: 'block' }}>{t.description}</span>
         </span>
       </button>)}

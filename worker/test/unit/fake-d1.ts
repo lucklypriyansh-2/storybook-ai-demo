@@ -26,8 +26,13 @@ type JobRow = {
   consent_id: string | null;
   payload: string | null;
 };
-type PhotoRow = { id: string; user_id: string; r2_key: string; deleted_at: number | null };
-type CharacterRow = { id: string; kid_id: string; sheet_r2_key: string; model: string; created_at: number };
+type PhotoRow = {
+  id: string; user_id: string; r2_key: string; created_at?: number; deleted_at: number | null;
+};
+type CharacterRow = {
+  id: string; kid_id: string; sheet_r2_key: string; model: string; created_at: number;
+  hints?: string | null;
+};
 type ReelRow = {
   id: string; user_id: string; kid_id: string; status: string; tier: string; story: string;
   created_at: number; template_id?: string | null; use_sheet?: number | null;
@@ -304,6 +309,14 @@ class FakeStatement {
       if (sql.includes("deleted_at IS NULL") && row.deleted_at !== null) return [[], 0];
       return [[{ id: row.id }], 0];
     }
+    // R.2.2 A-04 admin preview resolves the picked kid's display name.
+    if (sql.startsWith("SELECT id, display_name FROM kids WHERE id = ?")) {
+      const [kidId, userId] = args as [string, string];
+      const row = db.kids.get(kidId);
+      if (!row || row.user_id !== userId) return [[], 0];
+      if (sql.includes("deleted_at IS NULL") && row.deleted_at !== null) return [[], 0];
+      return [[{ id: row.id, display_name: row.display_name }], 0];
+    }
     if (sql.startsWith("INSERT INTO kids")) {
       const [id, user_id, display_name, created_at] = args as [string, string, string, number];
       db.kids.set(id, { id, user_id, display_name, deleted_at: null, created_at } as KidRow & { created_at: number });
@@ -324,8 +337,16 @@ class FakeStatement {
     // ---- photos_tmp ----
     if (sql.startsWith("INSERT INTO photos_tmp")) {
       const [id, user_id, r2_key] = args as [string, string, string];
-      db.photos.set(id, { id, user_id, r2_key, deleted_at: null });
+      db.photos.set(id, { id, user_id, r2_key, created_at: Date.now(), deleted_at: null });
       return [[], 1];
+    }
+    // 24h retention sweep (Phase C #E): live rows older than the cutoff.
+    if (sql.startsWith("SELECT id, r2_key FROM photos_tmp WHERE deleted_at IS NULL")) {
+      const cutoff = Number(args[0]);
+      const rows = [...db.photos.values()]
+        .filter((p) => p.deleted_at === null && (p.created_at ?? 0) < cutoff)
+        .map((p) => ({ id: p.id, r2_key: p.r2_key }));
+      return [rows, 0];
     }
     if (sql.startsWith("SELECT r2_key FROM photos_tmp")) {
       const [id, user_id] = args as [string, string];
@@ -338,6 +359,20 @@ class FakeStatement {
       const row = db.photos.get(id);
       if (!row || row.user_id !== user_id || row.deleted_at !== null) return [[], 0];
       return [[{ id: row.id }], 0];
+    }
+    // R.3.2: the photo the latest sheet job used, while it is still retained.
+    // Returns the newest *live* one so "Regenerate with edits" works after a
+    // re-render without a fresh upload.
+    if (sql.startsWith("SELECT j.photo_id AS photo_id FROM jobs j")) {
+      const [kidId, userId] = args as [string, string];
+      const candidates = [...db.jobs.values()]
+        .filter((j) => j.kid_id === kidId && j.type === "character_sheet" && !!j.photo_id)
+        .map((j) => ({ job: j, photo: db.photos.get(j.photo_id as string) }))
+        .filter((c) => c.photo && c.photo.user_id === userId && c.photo.deleted_at === null);
+      if (candidates.length === 0) return [[], 0];
+      // jobs have no created_at in the fake; the newest insertion wins.
+      const last = candidates[candidates.length - 1]!;
+      return [[{ photo_id: last.photo!.id }], 0];
     }
     if (sql.startsWith("SELECT p.id, p.r2_key FROM photos_tmp p")) {
       const [kidId, userId] = args as [string, string];
@@ -367,8 +402,12 @@ class FakeStatement {
 
     // ---- characters ----
     if (sql.startsWith("INSERT INTO characters")) {
-      const [id, kid_id, sheet_r2_key, model, created_at] = args as [string, string, string, string, number];
-      db.characters.set(id, { id, kid_id, sheet_r2_key, model, created_at });
+      // The render writes the look it used onto the row it creates, so a
+      // hint-only regenerate survives for a kid with no prior character row.
+      const [id, kid_id, sheet_r2_key, model, hints, created_at] = args as [
+        string, string, string, string, string | null, number,
+      ];
+      db.characters.set(id, { id, kid_id, sheet_r2_key, model, hints, created_at });
       return [[], 1];
     }
     if (sql.startsWith("SELECT id FROM characters WHERE kid_id")) {
@@ -396,6 +435,39 @@ class FakeStatement {
         .sort((a, b) => b.created_at - a.created_at)
         .map((c) => ({ sheet_r2_key: c.sheet_r2_key }));
       return [rows.slice(0, 1), 0];
+    }
+    // R.3.2: the who/what of the saved look, read by the sheet render and GET.
+    if (sql.startsWith("SELECT sheet_r2_key, created_at, hints FROM characters")) {
+      const kid_id = String(args[0]);
+      const rows = [...db.characters.values()]
+        .filter((c) => c.kid_id === kid_id)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((c) => ({ sheet_r2_key: c.sheet_r2_key, created_at: c.created_at, hints: c.hints ?? null }));
+      return [rows.slice(0, 1), 0];
+    }
+    if (sql.startsWith("SELECT hints FROM characters WHERE kid_id")) {
+      const kid_id = String(args[0]);
+      const rows = [...db.characters.values()]
+        .filter((c) => c.kid_id === kid_id)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((c) => ({ hints: c.hints ?? null }));
+      return [rows.slice(0, 1), 0];
+    }
+    if (sql.startsWith("UPDATE characters SET hints = ? WHERE id = (SELECT")) {
+      const [hints, kid_id] = args as [string, string];
+      const row = [...db.characters.values()]
+        .filter((c) => c.kid_id === kid_id)
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      if (!row) return [[], 0];
+      row.hints = hints;
+      return [[], 1];
+    }
+    if (sql.startsWith("UPDATE characters SET hints = ? WHERE id = ?")) {
+      const [hints, id] = args as [string, string];
+      const row = db.characters.get(id);
+      if (!row) return [[], 0];
+      row.hints = hints;
+      return [[], 1];
     }
     if (sql.startsWith("DELETE FROM characters WHERE kid_id")) {
       let n = 0;
@@ -438,6 +510,29 @@ class FakeStatement {
       if (!row || row.user_id !== user_id) return [[], 0];
       return [[{ id: row.id, status: row.status, tier: row.tier, template_id: row.template_id ?? null }], 0];
     }
+    // R.5/#13: list echoes tier + template_id so the SPA binds a reel to its book
+    // without a per-reel GET.
+    if (sql.startsWith("SELECT id, status, tier, template_id, created_at FROM reels WHERE user_id")) {
+      const user_id = String(args[0]);
+      const rows = [...db.reels.values()]
+        .filter((r) => r.user_id === user_id)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((r) => ({
+          id: r.id, status: r.status, tier: r.tier,
+          template_id: r.template_id ?? null, created_at: r.created_at,
+        }));
+      return [rows, 0];
+    }
+    // R.5.1: patchPage needs the reel's kid/tier/story to regenerate a page.
+    if (sql.startsWith("SELECT id, kid_id, tier, story, template_id FROM reels WHERE id")) {
+      const [id, user_id] = args as [string, string];
+      const row = db.reels.get(id);
+      if (!row || row.user_id !== user_id) return [[], 0];
+      return [[{
+        id: row.id, kid_id: row.kid_id, tier: row.tier,
+        story: row.story, template_id: row.template_id ?? null,
+      }], 0];
+    }
     if (sql.startsWith("SELECT id FROM reels WHERE id = ? AND user_id")) {
       const [id, user_id] = args as [string, string];
       const row = db.reels.get(id);
@@ -477,8 +572,10 @@ class FakeStatement {
         progress: 0, error: null, photo_id: null, consent_id: null, payload: null,
       };
       if (sql.includes("'character_sheet'")) {
-        const [id, kid_id, photo_id, consent_id] = args as [string, string, string, string, number, number];
-        Object.assign(base, { id, kid_id, type: "character_sheet", photo_id, consent_id });
+        const [id, kid_id, photo_id, consent_id, payload] = args as [
+          string, string, string, string, string | null, number, number,
+        ];
+        Object.assign(base, { id, kid_id, type: "character_sheet", photo_id, consent_id, payload });
       } else if (sql.includes("'reel_generate'")) {
         const [id, reel_id, kid_id] = args as [string, string, string, number, number];
         Object.assign(base, { id, reel_id, kid_id, type: "reel_generate" });
@@ -491,9 +588,9 @@ class FakeStatement {
       db.jobs.set(base.id, base);
       return [[], 1];
     }
-    if (sql.startsWith("SELECT kid_id, photo_id FROM jobs WHERE id")) {
+    if (sql.startsWith("SELECT kid_id, photo_id, payload FROM jobs WHERE id")) {
       const row = db.jobs.get(String(args[0]));
-      return [row ? [{ kid_id: row.kid_id, photo_id: row.photo_id }] : [], 0];
+      return [row ? [{ kid_id: row.kid_id, photo_id: row.photo_id, payload: row.payload }] : [], 0];
     }
     if (sql.startsWith("SELECT reel_id FROM jobs WHERE id")) {
       const row = db.jobs.get(String(args[0]));
@@ -625,8 +722,9 @@ class FakeStatement {
 
     // ---- reel_page_overrides ----
     if (sql.startsWith("INSERT INTO reel_page_overrides")) {
-      const [reel_id, index, text, , updated_at] = args as [string, number, string, null, number];
-      db.pageOverrides.set(`${reel_id}:${index}`, { reel_id, index, text, keyframe_key: null, updated_at });
+      const [reel_id, index, text, keyframe_key, updated_at] =
+        args as [string, number, string | null, string | null, number];
+      db.pageOverrides.set(`${reel_id}:${index}`, { reel_id, index, text, keyframe_key, updated_at });
       return [[], 1];
     }
     if (sql.startsWith("SELECT") && sql.includes("FROM reel_page_overrides")) {
@@ -639,10 +737,12 @@ class FakeStatement {
       return [rows, 0];
     }
     if (sql.startsWith("UPDATE reel_page_overrides SET text")) {
-      const [text, updated_at, reel_id, index] = args as [string, number, string, number];
+      const [text, keyframe_key, updated_at, reel_id, index] =
+        args as [string | null, string | null, number, string, number];
       const row = db.pageOverrides.get(`${reel_id}:${index}`);
       if (!row) return [[], 0];
       row.text = text;
+      row.keyframe_key = keyframe_key;
       row.updated_at = updated_at;
       return [[], 1];
     }

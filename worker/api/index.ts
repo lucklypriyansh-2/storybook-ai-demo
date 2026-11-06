@@ -6,9 +6,14 @@ import { getEnv } from "../src/env-node";
 import { handleRequest } from "../src/handler";
 import { recoverStaleJobs } from "../src/jobs/recover";
 import { resetDaily } from "../src/scheduled/reset_daily";
-import { sweepTmp } from "../src/scheduled/sweep_tmp";
+import { sweepAll } from "../src/scheduled/sweep_tmp";
+import { startFfmpegProbe } from "../src/config/ffmpeg";
 
 export const config = { maxDuration: 60 };
+
+// Cold start: kick the ffmpeg probe off so the cache is warm for /api/health and
+// this function never blocks a request on an exec.
+startFfmpegProbe();
 
 async function toFetchRequest(req: IncomingMessage): Promise<Request> {
   const host = (req.headers["x-forwarded-host"] as string) ?? req.headers.host ?? "localhost";
@@ -48,11 +53,11 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   // Opportunistic sweep on first request after ~5 min of warmth; Vercel Hobby
   // has no scheduled invocations without Cron Jobs, so piggy-back on real
-  // traffic for sweepTmp / resetDaily / stale-job recovery.
+  // traffic for the 24h photo pass + tmp sweep / resetDaily / stale-job recovery.
   const now = Date.now();
   if (now - lastSweep > 5 * 60_000) {
     lastSweep = now;
-    Promise.all([sweepTmp(env), resetDaily(env), recoverStaleJobs(env)]).catch(() => {});
+    Promise.all([sweepAll(env), resetDaily(env), recoverStaleJobs(env)]).catch(() => {});
   }
 
   try {

@@ -4,12 +4,16 @@ import { Nibbs } from '../mascot';
 import { D, E, img } from '../motion';
 import { useStore } from '../store';
 import { Btn } from '../ui';
+import { likenessErrorCopy } from './PhotoLikenessCard';
 import type { DataApi } from '../data';
 
-/** Narrow Worker-only surface for saving per-page text (R.5.3). */
+/** Narrow Worker-only surface for saving per-page text (R.5.3) and AI regen (R.5.1). */
 type PageApi = DataApi & {
   saveBookPageText?: (reelId: string, bookId: string, index: number, text: string) => Promise<{ saved: boolean; server: boolean }>;
   resetBookPage?: (reelId: string, bookId: string, index: number) => Promise<{ ok: boolean }>;
+  regenerateBookPage?: (
+    reelId: string, bookId: string, index: number, opts?: { caption?: boolean; keyframe?: boolean; hint?: string },
+  ) => Promise<{ text: string; keyframe_url: string | null; regenerated: string[] }>;
 };
 
 function speak(text: string, onword: (i: number) => void, onend: () => void) {
@@ -31,13 +35,16 @@ export function BookReader() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
+  const [regenNote, setRegenNote] = useState<string | null>(null);
   const api = s.api as PageApi;
   useEffect(() => () => { window.speechSynthesis?.cancel(); }, []);
   if (!book) return <div className="body"><h1>No book yet</h1></div>;
   const N = book.pages.length;
   // The editor needs a place to persist: only the Worker exposes the page routes.
   const canEdit = !!book.reel_id && !!api.saveBookPageText;
-  const openEditor = () => { window.speechSynthesis?.cancel(); setReading(false); setWord(-1); setDraft(book.pages[i].text); setEditing(true); };
+  // R.5.1: rewrite this page's words with the AI. Only offered where the route exists.
+  const canRegenerate = !!book.reel_id && !!api.regenerateBookPage;
+  const openEditor = () => { window.speechSynthesis?.cancel(); setReading(false); setWord(-1); setDraft(book.pages[i].text); setRegenNote(null); setEditing(true); };
   const savePage = async () => {
     const text = draft.trim();
     if (!text || !book.reel_id) return;
@@ -58,6 +65,27 @@ export function BookReader() {
       // The refreshed book carries the template text again; reopening shows it.
       s.toast('↺ Back to the template text');
       setEditing(false);
+    } finally { setSaving(false); }
+  };
+  /**
+   * R.5.1: ask the Worker to rewrite this page. The call is real (and billed like
+   * any other paid step), so a refusal — killed, over budget, provider off — is
+   * shown as-is instead of being reported as success.
+   *
+   * Preview only: the proposed words land in the draft and nowhere else. Save
+   * writes them; Cancel discards them without the page having changed server-side
+   * (the route does not persist a regenerate), so the copy and Cancel agree.
+   */
+  const regeneratePage = async () => {
+    if (!book.reel_id || !api.regenerateBookPage) return;
+    setSaving(true); setRegenNote(null);
+    try {
+      const out = await api.regenerateBookPage(book.reel_id, book.id, i, { caption: true });
+      setDraft(out.text);
+      setRegenNote('✨ New words from the AI — nothing changed yet. Save to keep them, Cancel to leave the page as it is.');
+    } catch (e) {
+      const code = String((e as { code?: string })?.code ?? (e as Error)?.message ?? 'error').split(':')[0];
+      setRegenNote(likenessErrorCopy(code));
     } finally { setSaving(false); }
   };
   const flip = (d: 1 | -1) => { if (turn || i + d < 0 || i + d >= N) return; window.speechSynthesis?.cancel(); setReading(false); setWord(-1); setTurn(d); };
@@ -97,9 +125,11 @@ export function BookReader() {
         onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void savePage(); } }} />
       <div className="row" style={{ marginTop: 8, gap: 8 }}>
         <Btn disabled={saving || !draft.trim()} onClick={savePage} data-testid="save-page">{saving ? 'Saving…' : 'Save'}</Btn>
+        {canRegenerate && <Btn kind="sun" disabled={saving} onClick={regeneratePage} data-testid="regenerate-page">{saving ? 'Asking…' : '✨ Regenerate this page (AI)'}</Btn>}
         <Btn kind="ghost" disabled={saving} onClick={resetPage} data-testid="reset-page">Reset to template</Btn>
         <Btn kind="ghost" disabled={saving} onClick={() => setEditing(false)} data-testid="cancel-edit">Cancel</Btn>
       </div>
+      {regenNote && <p className="cap" data-testid="regen-note" style={{ textAlign: 'left' }}>{regenNote}</p>}
       <p className="cap" style={{ textAlign: 'left' }}>Save keeps the drawing and changes only the words. ⌘/Ctrl + Enter to save.</p>
     </div>}
   </div>;

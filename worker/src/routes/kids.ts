@@ -1,4 +1,5 @@
 import type { Ctx } from "../router";
+import type { Env } from "../env";
 import { requireSession } from "../auth/middleware";
 import { assertHeadroom } from "../budget/ledger";
 import { isKilled } from "../budget/kill_switch";
@@ -9,8 +10,28 @@ import { livePaid } from "../providers";
 import { deleteObject, deletePrefix } from "../storage/r2";
 import { mediaUrl } from "../storage/signed";
 import { readJson, requireString } from "../util/http";
+import { hintsOrNull, parseHints, serializeHints } from "../util/hints";
 import { ApiError, BadRequest, Forbidden, KillSwitchOn, NotFound } from "../util/errors";
 import { uuid } from "../util/uuid";
+
+/** Photo a previous sheet was rendered from, while it is still retained. */
+async function retainedPhotoId(
+  env: Env,
+  kidId: string,
+  userId: string,
+): Promise<string | null> {
+  const row = await env.DB.prepare(
+    `SELECT j.photo_id AS photo_id
+       FROM jobs j
+       JOIN photos_tmp p ON p.id = j.photo_id
+      WHERE j.kid_id = ? AND j.type = 'character_sheet' AND j.photo_id IS NOT NULL
+        AND p.user_id = ? AND p.deleted_at IS NULL
+      ORDER BY j.created_at DESC LIMIT 1`,
+  )
+    .bind(kidId, userId)
+    .first<{ photo_id: string }>();
+  return row?.photo_id ?? null;
+}
 
 export async function list({ env, req }: Ctx): Promise<Response> {
   const session = await requireSession(env, req);
@@ -102,10 +123,10 @@ export async function characterSheetRead({ env, req, params }: Ctx): Promise<Res
   if (!kid) throw new NotFound("kid_not_found");
 
   const row = await env.DB.prepare(
-    "SELECT sheet_r2_key, created_at FROM characters WHERE kid_id = ? ORDER BY created_at DESC LIMIT 1",
+    "SELECT sheet_r2_key, created_at, hints FROM characters WHERE kid_id = ? ORDER BY created_at DESC LIMIT 1",
   )
     .bind(kidId)
-    .first<{ sheet_r2_key: string; created_at: number }>();
+    .first<{ sheet_r2_key: string; created_at: number; hints: string | null }>();
 
   const stored = row?.sheet_r2_key ? await env.R2.get(row.sheet_r2_key) : null;
   if (!row || !stored) throw new ApiError(404, "no_character_sheet");
@@ -120,15 +141,64 @@ export async function characterSheetRead({ env, req, params }: Ctx): Promise<Res
     sheet_url: await mediaUrl(env, row.sheet_r2_key),
     version: count?.n ?? 1,
     updated_at: new Date(row.created_at).toISOString(),
+    // R.3.2: the saved look, or null when the parent never edited it. The SPA
+    // pre-fills the editor from this and never invents defaults of its own.
+    hints: hintsOrNull(row.hints),
   });
 }
 
+/**
+ * R.3.2 "Save look": records the parent's hints on the current sheet without
+ * spending anything. Deliberately separate from the regenerate route so the
+ * cheap, instant action never queues an image call.
+ */
+export async function characterSheetHints({ env, req, params }: Ctx): Promise<Response> {
+  const session = await requireSession(env, req);
+  const kidId = params.id ?? "";
+  const kid = await env.DB.prepare(
+    "SELECT id FROM kids WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+  )
+    .bind(kidId, session.user_id)
+    .first<{ id: string }>();
+  if (!kid) throw new NotFound("kid_not_found");
+
+  const body = await readJson<{ hints?: unknown }>(req);
+  if (!body.hints || typeof body.hints !== "object") throw new BadRequest("hints_required");
+  const hints = parseHints(body.hints);
+
+  const row = await env.DB.prepare(
+    "SELECT id FROM characters WHERE kid_id = ? ORDER BY created_at DESC LIMIT 1",
+  )
+    .bind(kidId)
+    .first<{ id: string }>();
+  if (!row) throw new ApiError(404, "no_character_sheet");
+
+  await env.DB.prepare("UPDATE characters SET hints = ? WHERE id = ?")
+    .bind(serializeHints(hints), row.id)
+    .run();
+
+  return Response.json({ ok: true, kid_id: kidId, hints: hintsOrNull(hints) });
+}
+
+/**
+ * Queues a character-sheet render (R.3.1/R.3.2).
+ *
+ * `hints` is optional and, when sent, is carried on the job payload so the
+ * render honours it and stores it on the character row it creates — this is what
+ * makes a hint-only regenerate work for a kid who has no `characters` row yet.
+ * `photo_id` is optional too: a kid who already has a sheet can regenerate from
+ * the *retained* photo of the most recent sheet job, which is what makes
+ * "Regenerate with edits" work after the 24h photo window closes. With neither
+ * an upload nor a retained photo this fails fast with `photo_expired` rather
+ * than queueing a job that can only fail later.
+ */
 export async function characterSheet({ env, req, params }: Ctx): Promise<Response> {
   const session = await requireSession(env, req);
   const kidId = params.id ?? "";
-  const body = await readJson<{ photo_id?: unknown; consent_id?: unknown }>(req);
-  const photoId = requireString(body, "photo_id");
+  const body = await readJson<{ photo_id?: unknown; consent_id?: unknown; hints?: unknown }>(req);
   const consentId = requireString(body, "consent_id");
+  const photoId = typeof body.photo_id === "string" && body.photo_id.trim() ? body.photo_id.trim() : null;
+  const hints = body.hints === undefined ? null : parseHints(body.hints);
 
   const kid = await env.DB.prepare("SELECT id FROM kids WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
     .bind(kidId, session.user_id)
@@ -142,12 +212,20 @@ export async function characterSheet({ env, req, params }: Ctx): Promise<Respons
     .first();
   if (!consent) throw new Forbidden("consent_required");
 
-  const photo = await env.DB.prepare(
-    "SELECT id FROM photos_tmp WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-  )
-    .bind(photoId, session.user_id)
-    .first();
-  if (!photo) throw new BadRequest("photo_not_found");
+  let sourcePhotoId = photoId;
+  if (sourcePhotoId) {
+    const photo = await env.DB.prepare(
+      "SELECT id FROM photos_tmp WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    )
+      .bind(sourcePhotoId, session.user_id)
+      .first();
+    if (!photo) throw new BadRequest("photo_not_found");
+  } else {
+    // No upload this time: reuse the photo the previous sheet was made from, if
+    // it is still inside the retention window.
+    sourcePhotoId = await retainedPhotoId(env, kidId, session.user_id);
+    if (!sourcePhotoId) throw new BadRequest("photo_expired");
+  }
 
   if (await isKilled(env)) throw new KillSwitchOn();
   // Free path (mock providers / openrouter disabled) stays at $0; only a real
@@ -158,10 +236,24 @@ export async function characterSheet({ env, req, params }: Ctx): Promise<Respons
 
   const jobId = uuid();
   const now = Date.now();
+  // The look travels on the job, not on a `characters` row. For a brand-new kid
+  // there is no row to update yet — the old conditional UPDATE matched zero rows
+  // and the render silently ran without the hints the parent had just chosen.
+  // The job carries them instead and the render writes them onto the character
+  // row it inserts, so GET returns them afterwards too.
+  const jobHints = serializeHints(hints);
   await env.DB.prepare(
-    "INSERT INTO jobs (id, reel_id, kid_id, type, status, progress, error, attempt, photo_id, consent_id, created_at, updated_at) VALUES (?, NULL, ?, 'character_sheet', 'queued', 0, NULL, 0, ?, ?, ?, ?)",
+    "INSERT INTO jobs (id, reel_id, kid_id, type, status, progress, error, attempt, photo_id, consent_id, payload, created_at, updated_at) VALUES (?, NULL, ?, 'character_sheet', 'queued', 0, NULL, 0, ?, ?, ?, ?, ?)",
   )
-    .bind(jobId, kidId, photoId, consentId, now, now)
+    .bind(
+      jobId,
+      kidId,
+      sourcePhotoId,
+      consentId,
+      jobHints ? JSON.stringify({ hints: hintsOrNull(jobHints) }) : null,
+      now,
+      now,
+    )
     .run();
   await env.JOBS.send({ job_id: jobId });
 

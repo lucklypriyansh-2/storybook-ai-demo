@@ -6,7 +6,9 @@ import { getEnv } from "./env-node";
 import { handleRequest } from "./handler";
 import { recoverStaleJobs } from "./jobs/recover";
 import { resetDaily } from "./scheduled/reset_daily";
-import { sweepTmp } from "./scheduled/sweep_tmp";
+import { sweepAll } from "./scheduled/sweep_tmp";
+import { startFfmpegProbe } from "./config/ffmpeg";
+import { SWEEP_INTERVAL_MS } from "./config/limits";
 
 async function toFetchRequest(req: IncomingMessage): Promise<Request> {
   const host = req.headers.host ?? "localhost";
@@ -55,6 +57,9 @@ const env = getEnv();
 void seedInviteIfConfigured(env).catch(() => {
   console.error("invite_seed_failed");
 });
+// Phase C #8: probe ffmpeg once at boot, fire-and-forget. /api/health then reads
+// the cache instead of blocking on an exec (and an unresolved probe stays null).
+startFfmpegProbe();
 const port = Number(process.env.PORT ?? 8787);
 
 const server = createServer(async (req, res) => {
@@ -74,8 +79,10 @@ server.listen(port, () => {
 });
 
 // Scheduled work in-process on an interval, matching the CF `scheduled` hook.
+// sweepAll runs the 24h photo pass before the tmp-orphan pass, so the copy on
+// the photo card ("deleted within 24 h") is backed by an actual timer.
 setInterval(() => {
-  Promise.all([sweepTmp(env), resetDaily(env), recoverStaleJobs(env)]).catch((err) => {
+  Promise.all([sweepAll(env), resetDaily(env), recoverStaleJobs(env)]).catch((err) => {
     console.error("scheduled_error", err instanceof Error ? err.name : "unknown");
   });
-}, 60_000);
+}, SWEEP_INTERVAL_MS);
