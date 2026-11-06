@@ -80,6 +80,12 @@ LIBSQL_URL="libsql://…" LIBSQL_AUTH_TOKEN="…" \
 ## Rev 2 Phase B/C routes
 
 ```
+POST   /api/auth/register                  # { email, password } → session cookie (no invite required)
+POST   /api/auth/login                     # { email, password } → session cookie
+POST   /api/auth/invite                    # { code, email } → session cookie (legacy)
+GET    /api/auth/providers                 # { email, google, invite } — which paths are enabled here
+GET    /api/auth/google/start?return_to=…  # 302 to Google; signed state carries return_to
+GET    /api/auth/google/callback?code=&state=  # Google OIDC callback; 302 back to return_to with session cookie
 GET    /api/catalog                        # enabled templates (public, no session)
 GET    /api/catalog/:id                    # template detail + shot meta (public)
 GET    /api/kids/:id/character_sheet       # { sheet_url, version, updated_at, hints }; 404 if no blob
@@ -103,7 +109,7 @@ GET    /api/admin/templates/:id/preview    # requireAdmin, `?kid_id=` (A-04)
 - `{ text }` — save the words verbatim. No AI call, no spend.
 - `{ regenerate: { caption?, keyframe?, hint? } }` — ask the AI for new ones.
   Runs through the same provider/ledger stack as every other paid step, so it
-  honours the kill switch, the $10 cap and `provider_disabled`.
+  honours the kill switch, the $100 cap and `provider_disabled`.
 
 Responds with the page's *effective* text plus `{ edited, keyframe_edited }` and
 `regenerated: ["caption"|"keyframe"|"text"]`, so the client renders the result
@@ -173,6 +179,27 @@ while `flags.motion` is false (see §H: motion follows OpenRouter, not fal).
 `GET /api/health` reports `sweep: { interval_ms, tmp_max_age_ms,
 photos_max_age_ms }`.
 
+### Signup (email+password and Google)
+
+`POST /api/auth/register { email, password }` creates a brand-new account
+without an invite code; the response sets the same `sb_session` cookie that the
+invite route does. `POST /api/auth/login` accepts the same credentials later.
+Passwords are stored as PBKDF2-SHA256 (`210_000` iterations). Both routes
+respond with `401 invalid_credentials` for *either* a wrong password or an
+unknown email, so neither can be used to enumerate accounts.
+
+Google OAuth (OpenID Connect, auth-code flow) lives at
+`GET /api/auth/google/start?return_to=…` → Google → `GET
+/api/auth/google/callback`. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+`GOOGLE_REDIRECT_URI` to turn it on; with any of them unset the routes return
+`503 provider_disabled` and the SPA hides the Google button via
+`GET /api/auth/providers`. Register the callback URL with Google exactly
+matching `GOOGLE_REDIRECT_URI`, e.g.
+`https://white-eagle-244989.hostingersite.com/api/auth/google/callback`.
+
+The invite-code route (`POST /api/auth/invite`) stays for existing families and
+is advertised as optional; it is no longer the only way in.
+
 ### Admin bootstrap
 
 `users.is_admin` is still granted out of band. The bootstrap route is a
@@ -203,13 +230,16 @@ is compared in constant time, never echoed, and never logged.
 | `ALLOWED_ORIGIN` | optional | CORS origin (default `https://lucklypriyansh-2.github.io`) |
 | `PUBLIC_API_BASE` | optional | Public origin for absolute signed media URLs |
 | `FFMPEG_PATH` | optional | Explicit ffmpeg binary; falls back to the packaged `ffmpeg-static`, then `PATH` |
+| `GOOGLE_CLIENT_ID` | optional | Google OAuth client id; unset → `/api/auth/google/*` returns 503 and `/api/auth/providers` reports `google: false` |
+| `GOOGLE_CLIENT_SECRET` | optional | Google OAuth client secret; required alongside `GOOGLE_CLIENT_ID` |
+| `GOOGLE_REDIRECT_URI` | optional | Absolute HTTPS URL Google redirects to, e.g. `https://white-eagle-244989.hostingersite.com/api/auth/google/callback`. Must match what is registered in the Google Cloud console. |
 
 `MOCK_PROVIDERS=1` or a missing provider key always selects mocks, even if the
 corresponding `ENABLE_*` flag is on.
 
 ## Budget invariants
 
-- Hard cap $10 per paid provider, enforced by an atomic conditional UPDATE.
+- Hard cap $100 per paid provider for OpenRouter (images + text + motion share it), enforced by an atomic conditional UPDATE. `fal` cap stays at $10 and is unused (§H).
 - Pre-charge before the call, reconcile to `actual_usd` after, compensate on error.
 - Per user per UTC day: 5 character sheets, 10 reels.
 - Kill switch short-circuits paid calls with HTTP 402 and `{"error":"kill_switch"}`.

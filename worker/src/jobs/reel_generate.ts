@@ -42,12 +42,14 @@ export async function reelGenerateJob(env: Env, jobId: string): Promise<void> {
   // One pre-charge for the whole reel covers the shot list + all keyframes, then
   // reconciles to the summed actual at the end (H-11). Per-shot charges would
   // strand R2 objects and a partly-reconciled ledger if a later shot failed.
-  const paidReel = tier !== "free" && livePaid(env, "openrouter");
+  // Free also precharges when OpenRouter is live, because free now gets real
+  // stills (motion stays paid-only). A mocked or keyless run stays at $0.
+  const paidReel = livePaid(env, "openrouter");
   const ledger = paidReel
     ? await guardSpend({
         env,
         provider: "openrouter",
-        estUsd: prechargeUsd("paid"),
+        estUsd: prechargeUsd(tier),
         model: MODELS.openrouterImage,
         step: "reel_generate",
         userId: reel.user_id,

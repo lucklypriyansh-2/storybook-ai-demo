@@ -13,8 +13,13 @@ export class ApiError extends Error {
 }
 
 export class Unauthorized extends ApiError {
-  constructor(message = "unauthorized") {
-    super(401, "unauthorized", message);
+  // The argument doubles as the error *code* now (same convention as NotFound/
+  // Forbidden), so routes can throw `new Unauthorized("invalid_credentials")`
+  // and the SPA receives `{error:"invalid_credentials"}`. A bare `new
+  // Unauthorized()` still returns `unauthorized`, so existing callers keep
+  // working.
+  constructor(code = "unauthorized", message = code) {
+    super(401, code, message);
     this.name = "Unauthorized";
   }
 }

@@ -76,10 +76,15 @@ export async function create({ env, req }: Ctx): Promise<Response> {
   const useSheet = wantsSheet ? 1 : 0;
 
   const flags = readFlags(env);
+  // Headroom check whenever a live OpenRouter call *could* happen. That is now
+  // any tier when the provider is live, because free gets real stills too. A
+  // mocked or keyless run spends $0 and skips the check.
   if (tier !== "free") {
     if (await isKilled(env)) throw new KillSwitchOn();
     if (!flags.mockProviders && !flags.openrouter) throw new ProviderDisabled("openrouter");
-    await assertHeadroom(env.DB, "openrouter", prechargeUsd("paid"));
+  }
+  if (!flags.mockProviders && flags.openrouter && env.OPENROUTER_API_KEY) {
+    await assertHeadroom(env.DB, "openrouter", prechargeUsd(tier));
   }
   if (tier === "hd") {
     // Motion is OpenRouter now (§H): gate on the same key/flag as every other
@@ -203,7 +208,7 @@ export async function get({ env, req, params }: Ctx): Promise<Response> {
  * fine — the redraw is of the words the parent is saving.
  *
  * A `regenerate` runs synchronously through the same provider/ledger stack as
- * every other paid step, so it respects the kill switch, the $10 cap and
+ * every other paid step, so it respects the kill switch, the $100 cap and
  * `provider_disabled`. There is no job id: a single caption or keyframe is far
  * below the reel pipeline's cost and the client would otherwise poll for a
  * sub-second operation.

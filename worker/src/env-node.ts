@@ -59,6 +59,9 @@ export function getEnv(): NodeEnv {
     ...(process.env.ALLOWED_ORIGIN ? { ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN } : {}),
     ...(process.env.PUBLIC_API_BASE ? { PUBLIC_API_BASE: process.env.PUBLIC_API_BASE } : {}),
     ...(process.env.BUILD ? { BUILD: process.env.BUILD } : {}),
+    ...(process.env.GOOGLE_CLIENT_ID ? { GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID } : {}),
+    ...(process.env.GOOGLE_CLIENT_SECRET ? { GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET } : {}),
+    ...(process.env.GOOGLE_REDIRECT_URI ? { GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI } : {}),
   };
 
   cached = env;

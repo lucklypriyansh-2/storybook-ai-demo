@@ -17,9 +17,16 @@ export type ProviderSet = { image: ImageGen; text: TextGen; video: VideoGen; moc
  */
 export type PaidStep = "openrouter" | "fal";
 
-/** Free path always resolves to the mock in the portable build (no Workers AI). */
-export function pickFreeImage(_env: Env): ImageGen {
-  return makeMockImage();
+/**
+ * Free-tier image provider. When OpenRouter is live (flag on, key present, not
+ * mocked) free users now get real stills too — motion stays paid-only. If
+ * OpenRouter is not live, the mock still holds (preserves $0 tests and keyless
+ * local dev).
+ */
+export function pickFreeImage(env: Env): ImageGen {
+  return livePaid(env, "openrouter") && env.OPENROUTER_API_KEY
+    ? makeOpenRouterImage(env.OPENROUTER_API_KEY)
+    : makeMockImage();
 }
 
 /**
@@ -88,13 +95,17 @@ export function pickProvider(
   }
 
   if (step === "keyframe") {
-    if (tier === "free") return makeMockImage();
+    // Free also uses the live OpenRouter image when the flag is on and a key is
+    // present; otherwise it falls back to the mock. Paid/hd still throw if
+    // openrouter is off (an honest HD failure, never a silent mock).
+    if (tier === "free") return set.image;
     if (!flags.mockProviders && !flags.openrouter) throw new ProviderDisabled("openrouter");
     return set.image;
   }
 
   if (step === "shot_list") {
-    if (tier === "free") return makeMockText();
+    // Same rule for text: free uses the live model when available, else mock.
+    if (tier === "free") return set.text;
     if (!flags.mockProviders && !flags.openrouter) throw new ProviderDisabled("openrouter");
     return set.text;
   }

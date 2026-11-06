@@ -38,7 +38,14 @@ type ReelRow = {
   created_at: number; template_id?: string | null; use_sheet?: number | null;
 };
 type ConsentRow = { id: string; user_id: string; kid_id: string };
-type UserRow = { id: string; is_admin: number; email_hash?: string };
+type UserRow = {
+  id: string;
+  is_admin: number;
+  email_hash?: string;
+  password_hash?: string | null;
+  google_sub?: string | null;
+  auth_kind?: string;
+};
 type SessionRow = { id: string; user_id: string; expires_at: number };
 type TemplateRow = {
   id: string; slug: string; title: string; cover_key: string | null; description: string | null;
@@ -262,10 +269,46 @@ class FakeStatement {
 
     // ---- users / sessions (enough for requireSession) ----
     if (sql.startsWith("INSERT INTO users")) {
-      // is_admin is the literal 0 in the INSERT, so args hold id/email/code/created_at.
-      const [id, email_hash] = args as [string, string, string, number];
-      db.users.set(id, { id, is_admin: 0, email_hash });
+      // Three insert shapes:
+      //   invite:   (id, email_hash, invite_code, 0, created_at)
+      //   email:    (id, email_hash, invite_code, 0, created_at, password_hash, 'email')
+      //   google:   (id, email_hash, invite_code, 0, created_at, google_sub, 'google')
+      if (sql.includes("'email'")) {
+        const [id, email_hash, , created_at, password_hash] = args as [string, string, string, number, string];
+        void created_at;
+        db.users.set(id, { id, is_admin: 0, email_hash, password_hash, auth_kind: "email" });
+      } else if (sql.includes("'google'")) {
+        const [id, email_hash, , created_at, google_sub] = args as [string, string, string, number, string];
+        void created_at;
+        db.users.set(id, { id, is_admin: 0, email_hash, google_sub, auth_kind: "google" });
+      } else {
+        const [id, email_hash] = args as [string, string, string, number];
+        db.users.set(id, { id, is_admin: 0, email_hash, auth_kind: "invite" });
+      }
       return [[], 1];
+    }
+    if (sql.startsWith("SELECT id FROM users WHERE email_hash")) {
+      const email_hash = String(args[0]);
+      for (const u of db.users.values()) {
+        if (u.email_hash === email_hash) return [[{ id: u.id }], 0];
+      }
+      return [[], 0];
+    }
+    if (sql.startsWith("SELECT id, is_admin, password_hash FROM users WHERE email_hash")) {
+      const email_hash = String(args[0]);
+      for (const u of db.users.values()) {
+        if (u.email_hash === email_hash) {
+          return [[{ id: u.id, is_admin: u.is_admin, password_hash: u.password_hash ?? null }], 0];
+        }
+      }
+      return [[], 0];
+    }
+    if (sql.startsWith("SELECT id, is_admin FROM users WHERE google_sub")) {
+      const sub = String(args[0]);
+      for (const u of db.users.values()) {
+        if (u.google_sub === sub) return [[{ id: u.id, is_admin: u.is_admin }], 0];
+      }
+      return [[], 0];
     }
     if (sql.startsWith("SELECT id, is_admin FROM users WHERE email_hash")) {
       const email_hash = String(args[0]);
@@ -273,6 +316,13 @@ class FakeStatement {
         if (u.email_hash === email_hash) return [[{ id: u.id, is_admin: u.is_admin }], 0];
       }
       return [[], 0];
+    }
+    if (sql.startsWith("UPDATE users SET google_sub = ? WHERE id = ?")) {
+      const [sub, id] = args as [string, string];
+      const row = db.users.get(id);
+      if (!row) return [[], 0];
+      row.google_sub = sub;
+      return [[], 1];
     }
     if (sql.startsWith("UPDATE users SET is_admin = 1 WHERE id = ?")) {
       const row = db.users.get(String(args[0]));
